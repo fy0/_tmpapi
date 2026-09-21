@@ -1335,6 +1335,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			forwardResult.SearchCount = searchCount
 		}
 		stampOpenAIResponsesUpstreamEndpoint(c, forwardResult)
+		s.noteOpenAITurnStateModelDetached(c, account, forwardResult.UpstreamResponseModel)
 		return forwardResult, nil
 	}
 }

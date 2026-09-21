@@ -86,6 +86,8 @@ const (
 	// ctxKeyTurnStateRejected 与 ctxKeyTurnStateObserved 同理：非 WSv2 路径会在
 	// 剥掉 encrypted reasoning items 后重试一次，同一次注入可能撞两回 400。
 	ctxKeyTurnStateRejected = "openai_turn_state_rejected"
+	// ctxKeyTurnStateModelDetached 防止同一条响应把「实际模型脱离」记两次失败。
+	ctxKeyTurnStateModelDetached = "openai_turn_state_model_detached"
 	// ctxKeyTurnStateSent 记本次出站实际带的 blob，落 usage_logs.turn_state_sent。
 	ctxKeyTurnStateSent = "openai_turn_state_sent"
 )
@@ -561,8 +563,9 @@ func (s *OpenAIGatewayService) observeOpenAITurnStateMint(c *gin.Context, accoun
 	// 带的那张票无关（「10 块 → 11 块」一次都没发生过，而「注入有效期内的 292、上游
 	// 仍铸 312」是常态）。上游铸 312 是账号权重的读数，不是这张票坏了的证据。
 	//
-	// 票坏了的硬证据只有一个：上游回 invalid_encrypted_content，那条走
-	// noteOpenAITurnStateRejected。票在此之前一直用到自然过期。
+	// 票坏了的硬证据有两个：上游回 invalid_encrypted_content（noteOpenAITurnStateRejected），
+	// 以及降智暂停开着时实际响应模型脱离了请求模型（noteOpenAITurnStateModelDetached）。
+	// 单看「上游仍铸 312」不够，那是账号权重，不是这张票坏了。
 }
 
 // openAITurnStateObservation 是这个账号最近一次自然铸造出来的 turn-state 形态。
@@ -707,9 +710,9 @@ func (s *OpenAIGatewayService) loadOpenAITurnStatePoolFresh(ctx context.Context,
 // 的 encrypted_content lineage（见 openai_encrypted_content_lineage.go），跟 turn-state
 // 没关系；不加这道闸就会把别人的锅记到候选上、把好候选判死。
 //
-// 这是候选失效的**唯一**来源。曾经「注入 292、上游仍铸 312」也会记一次失败，那条
+// 上游拒绝是候选失效的来源之一。曾经「注入 292、上游仍铸 312」也会记一次失败，那条
 // 判据已移除——铸什么由账号当时的权重决定，与请求带的那张票无关，把它当失效证据
-// 会在阈值 1 下一次烧掉一张票。
+// 会在阈值 1 下一次烧掉一张票。实际响应模型对不上，走 noteOpenAITurnStateModelDetached。
 func (s *OpenAIGatewayService) noteOpenAITurnStateRejected(c *gin.Context, account *Account) {
 	if s == nil || account == nil || !account.IsOpenAITurnStateAutoEnabled() {
 		return
@@ -726,6 +729,43 @@ func (s *OpenAIGatewayService) noteOpenAITurnStateRejected(c *gin.Context, accou
 	}
 	logOpenAITurnStateAuto("account=%d injected turn-state rejected by upstream (invalid_encrypted_content)", account.ID)
 	s.recordOpenAITurnStateFailure(c, account, injected)
+}
+
+// noteOpenAITurnStateModelDetached 在降智暂停开着时做实际模型检测。
+//
+// 有票也不豁免：请求模型是 A，上游实际响应模型却不是 A，这张正在用的票作废。
+// 模型名只去掉 openai/ 前缀再比，别的别名不算脱离。响应里没报模型、探测请求、
+// 暂停关着，都不动票。
+func (s *OpenAIGatewayService) noteOpenAITurnStateModelDetached(c *gin.Context, account *Account, actualModel string) {
+	if s == nil || c == nil || account == nil || openAITurnStateProbeContext(c) || !account.IsOpenAITurnStateAutoEnabled() {
+		return
+	}
+	requested := openAITurnStateRequestModel(c)
+	if requested == "" || !s.openAITurnStateHoldEnabled(account, requested) {
+		return
+	}
+	sent := strings.TrimSpace(OpenAITurnStateUsageSent(c))
+	if sent == "" {
+		return
+	}
+	actual := openAITurnStateComparableModel(actualModel)
+	if actual == "" || actual == openAITurnStateComparableModel(requested) {
+		return
+	}
+	if seen, _ := c.Get(ctxKeyTurnStateModelDetached); seen == sent {
+		return
+	}
+	c.Set(ctxKeyTurnStateModelDetached, sent)
+	logOpenAITurnStateAuto(
+		"account=%d model=%s actual=%s turn-state voided: response model detached",
+		account.ID, requested, actual)
+	s.recordOpenAITurnStateFailure(c, account, sent)
+}
+
+func openAITurnStateComparableModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	model = strings.TrimPrefix(model, "openai/")
+	return model
 }
 
 // pushOpenAITurnStateCandidate 把新铸的健康 blob 推入候选池栈顶。
@@ -772,7 +812,8 @@ func (s *OpenAIGatewayService) pushOpenAITurnStateCandidate(c *gin.Context, acco
 
 // recordOpenAITurnStateFailure 给一条候选记一次失败；候选耗尽时停掉账号调度。
 //
-// 唯一的调用方是 noteOpenAITurnStateRejected——上游明确拒绝这条 blob 才算失败。
+// 调用方是 noteOpenAITurnStateRejected（上游明确拒绝这条 blob）和
+// noteOpenAITurnStateModelDetached（降智暂停开着，实际模型脱离了请求模型）。
 // 刻意没有「成功」的对侧动作（曾经有过一个重置 FailStreak 的分支）：票用得好好的
 // 时候上游不给任何信号，而「上游铸出 292」不是这张票的功劳（铸什么由账号权重定），
 // 拿它去重置计数只是把同一个误判换个方向再做一遍。

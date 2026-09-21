@@ -415,3 +415,54 @@ func TestOpenAITurnStateAutoModeHuntsEverHeldModelAfterRestart(t *testing.T) {
 	require.Equal(t, []string{hunterTestModel}, repo.holds)
 	require.False(t, gw.openAITurnStateHuntedModel(account, "gpt-5.6-sol"), "没停过、没铸过的模型仍不算")
 }
+
+func putHeldTicket(account *Account, blob string) {
+	account.Extra[openAITurnStatePoolExtraKey] = []any{map[string]any{
+		"blob": blob, "model": hunterTestModel, "minted_at": time.Now().UTC().Format(time.RFC3339),
+	}}
+}
+
+// TestOpenAITurnStateHoldVoidsTicketWhenResponseModelDetaches 钉住降智暂停开着时的实际模型检测：
+// 手里有票，真实请求的响应模型却对不上所请求的模型，当前票作废。同名别名、没报模型、暂停关着、探测都不动票。
+func TestOpenAITurnStateHoldVoidsTicketWhenResponseModelDetaches(t *testing.T) {
+	blob := turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks)
+	newCase := func(hold bool) (*OpenAIGatewayService, *Account, *gin.Context) {
+		cfg := hunterConfig(nil)
+		if hold {
+			cfg = holdHunterConfig(nil)
+		}
+		repo := newTurnStateAutoRepo()
+		account := hunterTestAccount(cfg)
+		putHeldTicket(account, blob)
+		repo.latest = account
+		c := turnStateAutoCtxModel("real", hunterTestModel)
+		markOpenAITurnStateSent(c, account, blob)
+		return &OpenAIGatewayService{accountRepo: repo}, account, c
+	}
+
+	gw, account, c := newCase(true)
+	gw.noteOpenAITurnStateModelDetached(c, account, "gpt-5.6-luna")
+	pool := readOpenAITurnStatePool(account)
+	require.Len(t, pool, 1)
+	require.True(t, pool[0].Failed, "实际模型脱离，票作废")
+	require.Equal(t, 1, pool[0].FailStreak)
+	gw.noteOpenAITurnStateModelDetached(c, account, "gpt-5.6-luna")
+	require.Equal(t, 1, readOpenAITurnStatePool(account)[0].FailStreak, "同一条响应不记第二次")
+
+	gw, account, c = newCase(true)
+	gw.noteOpenAITurnStateModelDetached(c, account, "openai/"+hunterTestModel)
+	require.False(t, readOpenAITurnStatePool(account)[0].Failed, "openai/ 前缀不是脱离")
+
+	gw, account, c = newCase(true)
+	gw.noteOpenAITurnStateModelDetached(c, account, "")
+	require.False(t, readOpenAITurnStatePool(account)[0].Failed, "没报实际模型不动票")
+
+	gw, account, c = newCase(false)
+	gw.noteOpenAITurnStateModelDetached(c, account, "gpt-5.6-luna")
+	require.False(t, readOpenAITurnStatePool(account)[0].Failed, "暂停关着不因模型脱离废票")
+
+	gw, account, c = newCase(true)
+	c.Set(ctxKeyTurnStateProbe, true)
+	gw.noteOpenAITurnStateModelDetached(c, account, "gpt-5.6-luna")
+	require.False(t, readOpenAITurnStatePool(account)[0].Failed, "探测不是真实请求")
+}
