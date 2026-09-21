@@ -479,7 +479,7 @@ func turnStateFernetBlob(minted time.Time, blocks int) string {
 	return base64.URLEncoding.EncodeToString(raw)
 }
 
-// TestOpenAITurnStateManualOverrideExpires 钉住手填覆写也有 1 小时有效期。
+// TestOpenAITurnStateManualOverrideExpires 钉住手填覆写也有默认 4 分钟有效期。
 //
 // 不加这道闸的话：手填只在自动接管关闭时生效，而失效归因要求自动接管开着，
 // 所以过期的手填票会每次注入、每次撞 400，并且永远不会被发现。
@@ -491,7 +491,7 @@ func TestOpenAITurnStateManualOverrideExpires(t *testing.T) {
 		account.Extra[openAITurnStateOverrideExtraKey] = map[string]any{turnStateTestModel: blob}
 	}
 
-	fresh := turnStateFernetBlob(now.Add(-5*time.Minute), openAIHealthyTurnStateBlocks)
+	fresh := turnStateFernetBlob(now.Add(-30*time.Second), openAIHealthyTurnStateBlocks)
 	setOverride(fresh)
 	require.Equal(t, fresh, account.OpenAICodexTurnStateOverride(turnStateTestModel), "未过期照常生效")
 
@@ -775,7 +775,7 @@ func TestOpenAITurnStateAutoDefaults(t *testing.T) {
 	bare := turnStateAutoAccount()
 	require.Equal(t, 3, bare.openAITurnStatePoolSize(), "候选池深度默认 3")
 	require.Equal(t, 1, bare.openAITurnStateFailThreshold(), "失效阈值默认 1 次")
-	require.Equal(t, time.Hour, bare.openAITurnStateStaleAfter(), "保鲜期默认 60 分钟")
+	require.Equal(t, 4*time.Minute, bare.openAITurnStateStaleAfter(), "保鲜期默认 4 分钟")
 
 	// 三个都是后端配置项（不开放前端），能被 extra 覆盖
 	bare.Extra[openAITurnStatePoolSizeExtraKey] = 5

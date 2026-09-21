@@ -378,7 +378,7 @@ func TestOpenAITurnStateHunterSkipsWhenTicketFresh(t *testing.T) {
 		}}
 	}
 
-	setPool(now.Add(-5 * time.Minute)) // 还剩 55 分钟
+	setPool(now.Add(-30 * time.Second)) // 默认 4 分钟寿命，还剩 3.5 分钟 > 1 分钟开窗
 	h.run(t)
 	require.Empty(t, h.up.requests, "票还够用，不探测")
 	require.Equal(t, openAITurnStateHuntGateFresh, h.state().Gate, "被门槛挡住要留痕，页面才分得清「票还新鲜」和「没在跑」")
@@ -386,11 +386,11 @@ func TestOpenAITurnStateHunterSkipsWhenTicketFresh(t *testing.T) {
 	h.run(t)
 	require.Len(t, h.repo.extraWrites, writes, "原因没变就不再落库")
 
-	setPool(now.Add(-52 * time.Minute)) // 只剩 8 分钟 < 10
+	setPool(now.Add(-3*time.Minute - 30*time.Second)) // 只剩 30 秒 < 1 分钟开窗
 	healthy, _ := hunterResp(http.StatusOK, turnStateFernetBlob(now, openAIHealthyTurnStateBlocks), "")
 	h.up.queue = []*http.Response{healthy}
 	h.run(t)
-	require.Len(t, h.up.requests, 1, "到期前 10 分钟开窗")
+	require.Len(t, h.up.requests, 1, "到期前 1 分钟开窗")
 	require.Empty(t, h.up.requests[0].Header.Get("x-codex-turn-state"), "池里有票、猎手又开着：探测仍必须裸发，自然铸造")
 	require.Empty(t, h.state().Gate, "开猎就清掉门槛痕迹")
 }
@@ -401,11 +401,11 @@ func TestOpenAITurnStateHunterZeroMintedAtStillHunts(t *testing.T) {
 	now := time.Now().UTC()
 	h := newHunterHarness(hunterTestAccount(hunterConfig(nil)), hunterWebshareProxy)
 	opaque := map[string]any{"blob": "opaque-not-fernet", "model": hunterTestModel, "minted_at": time.Time{}}
-	fresh := map[string]any{"blob": turnStateFernetBlob(now.Add(-5*time.Minute), openAIHealthyTurnStateBlocks), "model": hunterTestModel, "minted_at": now.Add(-5 * time.Minute)}
+	fresh := map[string]any{"blob": turnStateFernetBlob(now.Add(-30*time.Second), openAIHealthyTurnStateBlocks), "model": hunterTestModel, "minted_at": now.Add(-30 * time.Second)}
 	healthy, _ := hunterResp(http.StatusOK, turnStateFernetBlob(now, openAIHealthyTurnStateBlocks), "")
 	h.up.queue = []*http.Response{healthy}
 
-	// 零戳条目 + 一张还剩 55 分钟的真票：真票说了算，不探测（零戳条目既不压猎手也不抬 newest）。
+	// 零戳条目 + 一张还剩 3.5 分钟的真票：真票说了算，不探测（零戳条目既不压猎手也不抬 newest）。
 	h.account.Extra[openAITurnStatePoolExtraKey] = []any{opaque, fresh}
 	h.run(t)
 	require.Empty(t, h.up.requests)
@@ -907,7 +907,7 @@ func TestOpenAITurnStateHunterCapWaitSurvivesGatePersist(t *testing.T) {
 
 	// 上限调到 4，但此刻票还新鲜：被门槛挡住并留痕，CapWait 要原样留着。
 	h.account.Extra[openAITurnStateHunterExtraKey] = hunterConfig(map[string]any{"max_per_hour": 4})
-	setPool(now.Add(-5 * time.Minute))
+	setPool(now.Add(-30 * time.Second))
 	h.run(t)
 	require.Len(t, h.up.requests, 2)
 	st := h.state()
@@ -915,7 +915,7 @@ func TestOpenAITurnStateHunterCapWaitSurvivesGatePersist(t *testing.T) {
 	require.True(t, st.CapWait, "留痕不能抹掉等窗标记")
 
 	// 票快到期：本窗余量必须立刻用上，而不是等到 NextAt。
-	setPool(now.Add(-52 * time.Minute))
+	setPool(now.Add(-3*time.Minute - 30*time.Second))
 	healthy, _ := hunterResp(http.StatusOK, turnStateFernetBlob(now, openAIHealthyTurnStateBlocks), "")
 	h.up.queue = []*http.Response{healthy}
 	h.run(t)

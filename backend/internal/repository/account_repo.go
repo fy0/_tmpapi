@@ -81,6 +81,8 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	// 降智恢复探测的运行态（连胜 / 下次窗口 / 已恢复时刻），每次探测写一次，纯展示不参与调度。
 	// 配置键 openai_turn_state_recovery 由管理员写，不在此列。
 	"openai_turn_state_recovery_state": {},
+	// 292 的账号级路由 Cookie（__cflb / __oailb）。大约 240 秒一换，不参与调度。
+	"openai_turn_state_route_cookies": {},
 }
 
 const postgresParameterBatchSize = 50000

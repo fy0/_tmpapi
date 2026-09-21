@@ -72,6 +72,8 @@ func openAICodexTurnStateOwner(c *gin.Context, account *Account) string {
 // 者。上游无该头时主动清除 writer 上可能残留的上一 failover attempt 的值——否则换号
 // 后旧账号的 blob 会粘到新账号的响应上，这正是本文件要防止的跨账号矛盾。
 func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account *Account, upstream http.Header) {
+	// 路由 Cookie 和票一起从这条响应下来，但不能转给下游客户端。
+	s.noteOpenAITurnStateRouteCookies(c, account, upstream)
 	if c == nil || c.Writer == nil {
 		return
 	}
@@ -311,7 +313,7 @@ func readOpenAITurnStateOverrides(a *Account) map[string]string {
 // 本身是密文（信封里只有铸造时间戳），系统无从得知它来自哪个模型，只能由管理员在
 // 填的时候指定。取不到本次模型时不注入——这里没有「不限模型」这种配置了。
 //
-// 手填值与候选池同一条有效期：turn-state 自铸造起 1 小时可用，过期就不再注入。
+// 手填值与候选池同一条有效期：2026-09-22 起默认自铸造起 4 分钟可用，过期就不再注入。
 // 这道闸必须放在这个共享入口上——HTTP 与 WS 两条路径都从这里取值，放到调用点就会
 // 漏掉其中一条。过期后按「未配置」处理：不注入、不报错，等管理员换一条新的。
 //
@@ -400,6 +402,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnStateOverrideHeader(c *gin.Co
 	}
 	// 记下本次真正出站的值（可能来自客户端回带，也可能是刚注入的）。
 	markOpenAITurnStateSent(c, account, h.Get(openAICodexTurnStateHeader))
+	s.applyOpenAITurnStateRouteCookie(c, account, h)
 }
 
 // ValidateOpenAITurnStateAutoExtra 校验自动接管的配置键。

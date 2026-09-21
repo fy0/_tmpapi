@@ -15,7 +15,8 @@ import (
 )
 
 // 自动接管 turn-state：检测到某个 session 落在 312（降智）后，把该账号最近一条
-// 有效的 292 注入该 session 的后续请求；票一直用到自铸造起 1 小时自然过期。
+// 有效的 292 注入该 session 的后续请求。2026-09-22 凌晨上游拉闸后，票自铸造起
+// 大约 240 秒就失效，而且出站必须带上账号级路由 Cookie 才续得住。
 //
 // 候选失效只有一个来源——上游以 invalid_encrypted_content 拒绝这条 blob。曾经
 // 「注入 292 后上游仍铸出 312」也算失效，那个判据是错的：实测 578 条现网样本里新铸
@@ -39,17 +40,17 @@ const (
 	// 以下三个有配置项但不开放前端，按需用 API/DB 改。
 	openAITurnStatePoolSizeExtraKey   = "openai_turn_state_pool_size"
 	openAITurnStateFailThreshExtraKey = "openai_turn_state_fail_threshold"
-	// openAITurnStateStaleMinExtraKey 是候选的有效期（分钟）。默认 60：实测对家实时池
-	// 每张卡的「到期」都精确等于 Fernet 铸造戳 + 1 小时。键名沿用旧写法，避免已写进
-	// extra 的值失效。
+	// openAITurnStateStaleMinExtraKey 是候选的有效期（分钟）。默认 4：2026-09-22 凌晨
+	// 之前是铸造戳 + 1 小时，拉闸后 292 大约 240 秒就失效。键名沿用旧写法，避免已写进
+	// extra 的值失效；显式写了更长的分钟数仍按那个数走。
 	openAITurnStateStaleMinExtraKey = "openai_turn_state_stale_after_minutes"
 )
 
 const (
 	defaultOpenAITurnStatePoolSize      = 3
 	defaultOpenAITurnStateFailThreshold = 1
-	// defaultOpenAITurnStateStaleMinutes 是候选有效期：292 自铸造起可用 1 小时。
-	defaultOpenAITurnStateStaleMinutes = 60
+	// defaultOpenAITurnStateStaleMinutes 是候选有效期：292 自铸造起大约 240 秒。
+	defaultOpenAITurnStateStaleMinutes = 4
 	// openAITurnStateSessionTTL 是 session 长度状态的存活期。turn-state blob 实测
 	// 存活中位 2.6 分钟、最长 33 分钟，1 小时足够覆盖一个会话的活跃期。
 	openAITurnStateSessionTTL = time.Hour
@@ -191,9 +192,9 @@ func readOpenAITurnStatePool(account *Account) []openAITurnStateCandidate {
 
 // pickOpenAITurnStateCandidate 取第一条未失效且未过期的候选。
 //
-// 过期是硬门槛：实测对家的实时池六张卡，每张的「到期」都精确等于 Fernet 铸造戳 + 1
-// 小时，所以 292 的可用期就是 1 小时。过期的 blob 注进去只会白白换来一次
-// invalid_encrypted_content，不如不注入、直接等下一条自然铸出的 292。
+// 过期是硬门槛：2026-09-22 之前可用期是铸造戳 + 1 小时，拉闸后大约 240 秒。
+// 过期的 blob 注进去只会白白换来一次 invalid_encrypted_content，不如不注入、
+// 直接等下一条自然铸出的 292。
 //
 // 注意：这里返回 false 只表示「这一轮不注入」，不是降级链被消耗，所以不会触发禁用。
 func pickOpenAITurnStateCandidate(pool []openAITurnStateCandidate, model string, ttl time.Duration, now time.Time) (openAITurnStateCandidate, string, bool) {
@@ -693,6 +694,7 @@ func turnStateOpCtx(c *gin.Context) context.Context {
 func (s *OpenAIGatewayService) loadOpenAITurnStatePoolFresh(ctx context.Context, account *Account) []openAITurnStateCandidate {
 	if s.accountRepo != nil {
 		if latest, err := s.accountRepo.GetByID(ctx, account.ID); err == nil && latest != nil {
+			absorbOpenAITurnStateRouteCookies(latest)
 			return readOpenAITurnStatePool(latest)
 		}
 	}

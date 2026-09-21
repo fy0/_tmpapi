@@ -22,8 +22,8 @@ export const TURN_STATE_SHAPES = [
   { blocks: 12, chars: 332 } // team
 ] as const
 
-/** 票自铸造起 1 小时有效（对家实时池六张卡的「到期」都精确等于 Fernet 戳 + 1h）。 */
-export const TURN_STATE_DEFAULT_TTL_MINUTES = 60
+/** 票自铸造起 4 分钟有效（2026-09-22 拉闸后大约 240 秒；之前是 Fernet 戳 + 1h）。 */
+export const TURN_STATE_DEFAULT_TTL_MINUTES = 4
 
 /**
  * 降智暂停（后端 openai_turn_state_hold.go）借 model_rate_limits 存，reason 标本功能。

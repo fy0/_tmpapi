@@ -4,7 +4,8 @@ package service
 //
 // 背景（memory turn-state-block-count-cause / turn-state-remint-rules）：Codex 上游在每个
 // 新会话第一回合按「账号权重 × 当时出口 IP」铸一张 X-Codex-Turn-State，292 字符是正常
-// 路由、312 是降智路由；票只在铸造后 3600s 内有效，且只有自然铸造才反映权重。降智账号
+// 路由、312 是降智路由。2026-09-22 凌晨之前票在铸造后 3600s 内有效；拉闸后大约
+// 240 秒，而且出站必须带上账号级 __cflb / __oailb 才续得住。只有自然铸造才反映权重。降智账号
 // 自己铸的全是 312，候选池只出不进，唯一一张 292 到期后自动接管就永久空窗。猎手的
 // 工作就是在票到期前开新会话反复摇骰子：换一个出口 IP 发一条最小探测，头到手即断，
 // 摇到 292 就入池，交给自动接管注入真实流量。
@@ -83,7 +84,7 @@ const (
 	openAITurnStateHunterMaxGapSeconds  = 600
 
 	defaultOpenAITurnStateHuntMaxPerHour      = 30
-	defaultOpenAITurnStateHuntLeadMinutes     = 10
+	defaultOpenAITurnStateHuntLeadMinutes     = 1
 	defaultOpenAITurnStateHuntRetryMinutes    = 10
 	defaultOpenAITurnStateHuntIdleMinutes     = 60
 	defaultOpenAITurnStateHuntGapSeconds      = 20
@@ -96,7 +97,7 @@ const (
 // openAITurnStateHunterConfig 是 extra.openai_turn_state_hunter 的形态。
 //
 //	{"enabled":true,"models":["gpt-6-astra"],"proxy_ids":[20,21],
-//	 "max_per_hour":30,"lead_minutes":10,"retry_minutes":10,"idle_minutes":60,
+//	 "max_per_hour":30,"lead_minutes":1,"retry_minutes":10,"idle_minutes":60,
 //	 "gap_seconds":20,"reasoning_effort":"high"}
 //
 // 数值 0 表示取默认；idle_minutes 显式写负数表示「不设空闲门槛」。
@@ -182,6 +183,24 @@ func openAITurnStateHuntBound(v, def, max int) int {
 func (cfg openAITurnStateHunterConfig) lead() time.Duration {
 	return time.Duration(cfg.LeadMinutes) * time.Minute
 }
+
+// openAITurnStateHuntLeadWithin 把开窗提前量收进票的寿命。
+// 默认寿命改成 4 分钟之后，库里还写着 lead_minutes=10 的旧配置会让
+// 「剩余时间 > 开窗」永远不成立，每张新票都会被当成已经该换。
+// 寿命更短时改到最后 1 分钟再开窗。
+func openAITurnStateHuntLeadWithin(lead, ttl time.Duration) time.Duration {
+	if ttl <= 0 || lead < ttl {
+		return lead
+	}
+	if ttl > time.Minute {
+		return ttl - time.Minute
+	}
+	if ttl > time.Second {
+		return ttl - time.Second
+	}
+	return 0
+}
+
 func (cfg openAITurnStateHunterConfig) retry() time.Duration {
 	return time.Duration(cfg.RetryMinutes) * time.Minute
 }
@@ -754,7 +773,8 @@ func (s *OpenAITurnStateHunterService) modelsNeedingTicket(ctx context.Context, 
 	ttl := account.openAITurnStateStaleAfter()
 	wanted := make([]string, 0, len(active))
 	for _, model := range active {
-		if expiresAt, ok := openAITurnStateNewestUsableExpiry(pool, model, ttl, now); ok && expiresAt.Sub(now) > cfg.lead() {
+		lead := openAITurnStateHuntLeadWithin(cfg.lead(), ttl)
+		if expiresAt, ok := openAITurnStateNewestUsableExpiry(pool, model, ttl, now); ok && expiresAt.Sub(now) > lead {
 			continue
 		}
 		wanted = append(wanted, model)

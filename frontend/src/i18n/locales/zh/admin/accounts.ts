@@ -125,7 +125,7 @@ export default {
         ungrouped: '未分组',
         hint: '显示格式为“分组名 / 基础分 / 粘性加分”。基础分按当前筛选条件限定的候选账号计算，包含优先级、负载、排队、错误率、首包延迟、重置窗口、额度余量、计费倍率等因子；粘性加分只在开启粘性加权时用于 previous_response_id 或 session_hash。分数越大越优先。'
       },
-      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。紫色/琥珀色的条目是该账号当前生效的 Codex Turn-State（按模型分），倒计时是这张票自铸造起 1 小时的剩余有效期；琥珀色代表这张票疑似降智。',
+      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。紫色/琥珀色的条目是该账号当前生效的 Codex Turn-State（按模型分），倒计时是这张票自铸造起 4 分钟的剩余有效期；琥珀色代表这张票疑似降智。',
       ollamaCloud: {
         title: 'Ollama Cloud 用量',
         sessionSecurityHint: '浏览器会话会加密落库，且只发送到固定的 Ollama 官方设置页。',
@@ -780,7 +780,7 @@ export default {
         turnStateOverrideExpired: '已过期(铸于 {minted})，不会再注入，请换一条新的',
         turnStateAuto: '自动接管 turn-state',
         turnStateAutoDesc:
-          '开启后由系统接管：检测到某个会话落在 312 时，自动用该账号同一模型下最近一条有效的 292 顶替；若注入 292 后上游仍铸出 312，判该候选失效并降级到下一条，该模型的候选全部失效则停用账号并写明原因。候选按「账号 × 模型」分桶（turn-state 换模型就不认），自铸造起 1 小时有效，过期不再顶替、直接等下一条新的 292。开启后手填值不再生效。仅覆盖 HTTP 路径，WebSocket 直通不参与自动接管。',
+          '开启后由系统接管：检测到某个会话落在 312 时，自动用该账号同一模型下最近一条有效的 292 顶替；若注入 292 后上游仍铸出 312，判该候选失效并降级到下一条，该模型的候选全部失效则停用账号并写明原因。候选按「账号 × 模型」分桶（turn-state 换模型就不认），自铸造起 4 分钟有效，出站会带上该账号最近拿到的路由 Cookie（__cflb / __oailb，与票不绑定，大约 240 秒过期）。过期不再顶替、直接等下一条新的 292。开启后手填值不再生效。仅覆盖 HTTP 路径，WebSocket 直通不参与自动接管。',
         turnStateAutoTakeover: '已由自动接管',
         turnStateModelsEmpty: '(拉不到模型列表)',
         turnStateOverrideConfigured: '已配票的模型：{models}',

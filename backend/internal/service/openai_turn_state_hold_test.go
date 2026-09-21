@@ -126,7 +126,7 @@ func TestOpenAITurnStateHoldSkips(t *testing.T) {
 		}, realCtx},
 		{"客户端回带本账号新鲜的 292", func() *Account { return hunterTestAccount(holdHunterConfig(nil)) }, func() *gin.Context {
 			c := realCtx()
-			c.Request.Header.Set(openAICodexTurnStateHeader, turnStateFernetBlob(now.Add(-10*time.Minute), openAIHealthyTurnStateBlocks))
+			c.Request.Header.Set(openAICodexTurnStateHeader, turnStateFernetBlob(now.Add(-2*time.Minute), openAIHealthyTurnStateBlocks))
 			return c
 		}},
 	}
@@ -329,7 +329,7 @@ func TestOpenAITurnStateHoldReleasedWhenTicketAlreadyPooled(t *testing.T) {
 	h := newHunterHarness(hunterTestAccount(holdHunterConfig(nil)), hunterWebshareProxy)
 	markHeld(h.account, now.Add(30*time.Minute))
 	h.account.Extra[openAITurnStatePoolExtraKey] = []any{map[string]any{
-		"blob": turnStateFernetBlob(now.Add(-5*time.Minute), openAIHealthyTurnStateBlocks), "model": hunterTestModel, "minted_at": now.Add(-5 * time.Minute),
+		"blob": turnStateFernetBlob(now.Add(-30*time.Second), openAIHealthyTurnStateBlocks), "model": hunterTestModel, "minted_at": now.Add(-30 * time.Second),
 	}}
 
 	h.run(t)

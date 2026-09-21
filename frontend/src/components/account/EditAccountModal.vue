@@ -2522,7 +2522,7 @@
               </div>
               <div>
                 <label class="input-label text-xs">{{ t('admin.accounts.openai.turnStateHunterLead') }}</label>
-                <input v-model.number="openAITurnStateHunter.lead_minutes" type="number" min="1" max="55" placeholder="10" class="input text-xs" />
+                <input v-model.number="openAITurnStateHunter.lead_minutes" type="number" min="1" max="55" placeholder="1" class="input text-xs" />
               </div>
               <div>
                 <label class="input-label text-xs">{{ t('admin.accounts.openai.turnStateHunterIdle') }}</label>
@@ -3904,7 +3904,7 @@ const openAITurnStateOverrideHealthy = computed(() =>
   isTurnStateHealthy(turnStateSelectedBlob.value.trim())
 )
 
-// 手填值与候选池同一条 1 小时有效期，过期后后端直接不注入。不显示剩余有效期的话，
+// 手填值与候选池同一条有效期（默认 4 分钟），过期后后端直接不注入。不显示剩余有效期的话，
 // 「配了但不生效」就完全不可见——这是最难排查的那种失败。
 const openAITurnStateOverrideEnvelope = computed(() =>
   decodeTurnState(turnStateSelectedBlob.value.trim())

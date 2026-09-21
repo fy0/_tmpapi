@@ -73,12 +73,12 @@ const rows = (w: ReturnType<typeof render>) =>
 describe('AccountTurnStateCell', () => {
   it('每个模型一行，取数组里第一条未失效的', () => {
     const w = render(
-      account([cand('gpt-5.6-luna', 300), cand('gpt-5.6-luna', 900), cand('gpt-6-astra', 60, 11)])
+      account([cand('gpt-5.6-luna', 20), cand('gpt-5.6-luna', 900), cand('gpt-6-astra', 60, 11)])
     )
     const bars = w.findAll('.bar')
     expect(bars).toHaveLength(2)
     expect(bars.map((b) => b.attributes('data-label'))).toEqual(['gpt-5.6-luna', 'gpt-6-astra'])
-    // 剩余比例：luna 铸于 5 分钟前，1 小时有效 → 还剩约 92%
+    // 剩余比例：luna 铸于 20 秒前，4 分钟有效 → 还剩约 92%
     expect(Number(bars[0].text())).toBeGreaterThan(88)
     expect(Number(bars[0].text())).toBeLessThanOrEqual(92)
   })
