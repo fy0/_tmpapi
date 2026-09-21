@@ -25,18 +25,28 @@ func TestOpenAITurnStateRouteCookieRoundTrip(t *testing.T) {
 	fresh := turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks)
 	other := turnStateFernetBlob(time.Now().Add(-time.Second), openAIHealthyTurnStateBlocks)
 	for _, blob := range []string{fresh, other} {
+		markOpenAITurnStateInjected(c, blob, turnStateSourceAuto)
 		h := http.Header{}
 		h.Set("Cookie", "session=keep")
 		h.Set(openAICodexTurnStateHeader, blob)
 		svc.applyOpenAITurnStateRouteCookie(c, account, h)
-		require.Equal(t, "session=keep; __cflb=edge-1; __oailb=route-1", h.Get("Cookie"), "票和 Cookie 不绑定")
+		require.Equal(t, "session=keep; __cflb=edge-1; __oailb=route-1", h.Get("Cookie"), "打票注入的票和 Cookie 不绑定")
 	}
 
-	degraded := http.Header{}
-	degraded.Set(openAICodexTurnStateHeader, turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks+1))
-	svc.applyOpenAITurnStateRouteCookie(c, account, degraded)
-	require.Empty(t, degraded.Get("Cookie"), "312 不补路由 Cookie")
+	echo := http.Header{}
+	clearOpenAITurnStateInjected(c)
+	echo.Set(openAICodexTurnStateHeader, fresh)
+	svc.applyOpenAITurnStateRouteCookie(c, account, echo)
+	require.Empty(t, echo.Get("Cookie"), "客户端自己回带的票不补打票 Cookie")
 
+	degraded := turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks+1)
+	markOpenAITurnStateInjected(c, degraded, turnStateSourceAuto)
+	degradedHeader := http.Header{}
+	degradedHeader.Set(openAICodexTurnStateHeader, degraded)
+	svc.applyOpenAITurnStateRouteCookie(c, account, degradedHeader)
+	require.Empty(t, degradedHeader.Get("Cookie"), "312 不补路由 Cookie")
+
+	markOpenAITurnStateInjected(c, fresh, turnStateSourceAuto)
 	c.Set(ctxKeyTurnStateProbe, true)
 	probe := http.Header{}
 	probe.Set(openAICodexTurnStateHeader, fresh)
@@ -54,6 +64,7 @@ func TestOpenAITurnStateRouteCookieRoundTrip(t *testing.T) {
 	repo.latest = remote
 	local := &Account{ID: account.ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{}}
 	c.Set(ctxKeyTurnStateProbe, false)
+	markOpenAITurnStateInjected(c, fresh, turnStateSourceAuto)
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fresh)
 	svc.applyOpenAITurnStateRouteCookie(c, local, h)
@@ -68,8 +79,10 @@ func TestOpenAITurnStateRouteCookieExpires(t *testing.T) {
 	})
 	svc := &OpenAIGatewayService{}
 	c, _ := newTurnStateTestContext(t, 7, "sess-expired-cookie")
+	blob := turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks)
+	markOpenAITurnStateInjected(c, blob, turnStateSourceAuto)
 	h := http.Header{}
-	h.Set(openAICodexTurnStateHeader, turnStateFernetBlob(time.Now(), openAIHealthyTurnStateBlocks))
+	h.Set(openAICodexTurnStateHeader, blob)
 	svc.applyOpenAITurnStateRouteCookie(c, account, h)
 	require.Empty(t, h.Get("Cookie"))
 }

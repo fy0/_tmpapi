@@ -367,6 +367,27 @@ func TestOpenAITurnStateHunterHitPoolsAndHangsUp(t *testing.T) {
 	require.Empty(t, st.LastError)
 }
 
+// TestOpenAITurnStateHunterRefreshesWhenRouteCookieExpired 钉住打票的第二只表：
+// 票还在寿命里，但账号上收过的路由 Cookie 已经先死，也要重新打票。
+func TestOpenAITurnStateHunterRefreshesWhenRouteCookieExpired(t *testing.T) {
+	now := time.Now().UTC()
+	h := newHunterHarness(hunterTestAccount(hunterConfig(nil)), hunterWebshareProxy)
+	t.Cleanup(func() { openAITurnStateRouteCookies.Delete(h.account.ID) })
+	h.account.Extra[openAITurnStatePoolExtraKey] = []any{map[string]any{
+		"blob": turnStateFernetBlob(now.Add(-30*time.Second), openAIHealthyTurnStateBlocks), "model": hunterTestModel, "minted_at": now.Add(-30 * time.Second),
+	}}
+	openAITurnStateRouteCookies.Store(h.account.ID, openAITurnStateRouteCookieState{
+		cflb: "edge", oailb: "route", capturedAt: now.Add(-openAITurnStateRouteCookieTTL - time.Second),
+	})
+	healthy, _ := hunterResp(http.StatusOK, turnStateFernetBlob(now, openAIHealthyTurnStateBlocks), "")
+	h.up.queue = []*http.Response{healthy}
+
+	h.run(t)
+
+	require.Len(t, h.up.requests, 1, "Cookie 先过期，票还新鲜也要重新打票")
+	require.Empty(t, h.up.requests[0].Header.Get("Cookie"), "打票本身不带旧 Cookie")
+}
+
 // TestOpenAITurnStateHunterSkipsWhenTicketFresh 钉住开窗时机：票还够用就不猎，剩余不足
 // lead_minutes 才开始。
 func TestOpenAITurnStateHunterSkipsWhenTicketFresh(t *testing.T) {

@@ -780,7 +780,7 @@ export default {
         turnStateOverrideExpired: '已过期(铸于 {minted})，不会再注入，请换一条新的',
         turnStateAuto: '自动接管 turn-state',
         turnStateAutoDesc:
-          '开启后由系统接管：检测到某个会话落在 312 时，自动用该账号同一模型下最近一条有效的 292 顶替；若注入 292 后上游仍铸出 312，判该候选失效并降级到下一条，该模型的候选全部失效则停用账号并写明原因。候选按「账号 × 模型」分桶（turn-state 换模型就不认），自铸造起 4 分钟有效，出站会带上该账号最近拿到的路由 Cookie（__cflb / __oailb，与票不绑定，大约 240 秒过期）。过期不再顶替、直接等下一条新的 292。开启后手填值不再生效。仅覆盖 HTTP 路径，WebSocket 直通不参与自动接管。',
+          '开启后由系统接管：检测到某个会话落在 312 时，自动用该账号同一模型下最近一条有效的 292 顶替；若注入 292 后上游仍铸出 312，判该候选失效并降级到下一条，该模型的候选全部失效则停用账号并写明原因。候选按「账号 × 模型」分桶（turn-state 换模型就不认），自铸造起 4 分钟有效。打票注入的 292 会带上该账号的路由 Cookie（__cflb / __oailb，与票不绑定，Cookie 大约 2 分钟过期，先过期就重新打票）。过期不再顶替、直接等下一条新的 292。开启后手填值不再生效。仅覆盖 HTTP 路径，WebSocket 直通不参与自动接管。',
         turnStateAutoTakeover: '已由自动接管',
         turnStateModelsEmpty: '(拉不到模型列表)',
         turnStateOverrideConfigured: '已配票的模型：{models}',

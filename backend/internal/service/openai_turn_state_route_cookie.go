@@ -10,14 +10,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 2026-09-22 凌晨上游拉闸之后，292 不再能单靠票续一小时。
-// 实测：票管资格，__cflb / __oailb 管路由，两者不绑在同一张票上，也不绑对话；
-// 任何一个还活着的账号级 Cookie 都能配任何一张 292。不带 Cookie 的 292 续不上，
-// 带上之后整段大约 240 秒。Cookie 自己也会先死，所以单独计时，不写进候选池。
+// 打票（x-codex-turn-state 猎手）专用的账号级路由 Cookie。
+//
+// 2026-09-22 的两轮实测：
+//   - 打票打中 292 时响应同时带下 __cflb 和 __oailb。换一个出口，
+//     同一张票加同一组 Cookie 能连续打出 ASTRA，最后一次成功在 191.7 秒，
+//     267 秒已经在重铸 312。
+//   - 票管资格，Cookie 管路由。同一 session 里可以换票，票和 Cookie 也不必配对，
+//     账号上任何一只还活着的都行。两者各自计时：组合以前在 65–220 秒一起失效，
+//     更像是 Cookie 先死。所以 Cookie 不写进候选池，单独按更短的寿命过期。
 const (
 	openAITurnStateRouteCookieExtraKey = "openai_turn_state_route_cookies"
-	openAITurnStateRouteCookieTTL      = 240 * time.Second
-	// 值没变也定期落库，让别的实例在 240 秒窗口内读得到；不必每条响应都写。
+	// 短于票的 240 秒。120 秒落在「组合 65–220 秒失效」的前半段，
+	// 也早于默认开窗（票还剩 1 分钟才打），Cookie 先死时票看起来还新鲜也要重新打票。
+	openAITurnStateRouteCookieTTL = 120 * time.Second
+	// 值没变也定期落库，让别的实例在这条短寿命里读得到；不必每条响应都写。
 	openAITurnStateRouteCookiePersistGap = time.Minute
 
 	openAITurnStateRouteCookieCflb  = "__cflb"
@@ -136,7 +143,7 @@ func absorbOpenAITurnStateRouteCookies(account *Account) {
 	openAITurnStateRouteCookies.Store(account.ID, state)
 }
 
-func readOpenAITurnStateRouteCookies(account *Account) (openAITurnStateRouteCookieState, bool) {
+func decodeOpenAITurnStateRouteCookies(account *Account) (openAITurnStateRouteCookieState, bool) {
 	if account == nil || account.Extra == nil {
 		return openAITurnStateRouteCookieState{}, false
 	}
@@ -153,10 +160,31 @@ func readOpenAITurnStateRouteCookies(account *Account) (openAITurnStateRouteCook
 		return openAITurnStateRouteCookieState{}, false
 	}
 	state := openAITurnStateRouteCookieState{cflb: record.Cflb, oailb: record.Oailb, capturedAt: record.CapturedAt}
-	if !state.alive(time.Now()) {
+	if state.header() == "" {
 		return openAITurnStateRouteCookieState{}, false
 	}
 	return state, true
+}
+
+func readOpenAITurnStateRouteCookies(account *Account) (openAITurnStateRouteCookieState, bool) {
+	state, ok := decodeOpenAITurnStateRouteCookies(account)
+	if !ok || !state.alive(time.Now()) {
+		return openAITurnStateRouteCookieState{}, false
+	}
+	return state, true
+}
+
+// openAITurnStateRouteCookieExpired 报告这个账号曾经拿到过路由 Cookie、而且已经过期。
+// 从没拿到过不算过期：打票还没成功收过 Cookie 时，票自己的寿命仍然说了算。
+func (s *OpenAIGatewayService) openAITurnStateRouteCookieExpired(account *Account) bool {
+	if account == nil || account.ID <= 0 {
+		return false
+	}
+	if state, ok := loadOpenAITurnStateRouteCookies(account.ID); ok {
+		return state.header() != "" && !state.alive(time.Now())
+	}
+	state, ok := decodeOpenAITurnStateRouteCookies(account)
+	return ok && !state.alive(time.Now())
 }
 
 // noteOpenAITurnStateRouteCookies 在看到上游响应头时收 Cookie。
@@ -231,14 +259,18 @@ func (s *OpenAIGatewayService) liveOpenAITurnStateRouteCookie(c *gin.Context, ac
 	return state.header()
 }
 
-// applyOpenAITurnStateRouteCookie 给出站的健康票补上账号级路由 Cookie。
-// 票和 Cookie 不配对：池里任意一张活着的都可。探测保持裸发，免得把摇骰子钉死在旧路由上。
-// 312 不带——那条路由本来就不是要续的 292。
+// applyOpenAITurnStateRouteCookie 只给打票注入的健康票补账号级路由 Cookie。
+// 客户端自己回带的、手填的都不碰。票和 Cookie 不配对，同一 session 换另一张 292
+// 也带同一只 Cookie。探测保持裸发，免得把摇骰子钉死在旧路由上。
 func (s *OpenAIGatewayService) applyOpenAITurnStateRouteCookie(c *gin.Context, account *Account, h http.Header) {
 	if s == nil || h == nil || account == nil || !account.UsesOpenAICodexProtocol() || openAITurnStateProbeContext(c) {
 		return
 	}
-	if !openAITurnStateHealthy(h.Get(openAICodexTurnStateHeader)) {
+	if OpenAITurnStateUsageSource(c) != turnStateSourceAuto {
+		return
+	}
+	sent := strings.TrimSpace(h.Get(openAICodexTurnStateHeader))
+	if sent == "" || sent != openAITurnStateInjectedFromContext(c) || !openAITurnStateHealthy(sent) {
 		return
 	}
 	route := s.liveOpenAITurnStateRouteCookie(c, account)

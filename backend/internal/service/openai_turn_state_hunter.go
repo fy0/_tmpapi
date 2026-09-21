@@ -774,7 +774,8 @@ func (s *OpenAITurnStateHunterService) modelsNeedingTicket(ctx context.Context, 
 	wanted := make([]string, 0, len(active))
 	for _, model := range active {
 		lead := openAITurnStateHuntLeadWithin(cfg.lead(), ttl)
-		if expiresAt, ok := openAITurnStateNewestUsableExpiry(pool, model, ttl, now); ok && expiresAt.Sub(now) > lead {
+		cookieExpired := s.gateway != nil && s.gateway.openAITurnStateRouteCookieExpired(account)
+		if expiresAt, ok := openAITurnStateNewestUsableExpiry(pool, model, ttl, now); ok && expiresAt.Sub(now) > lead && !cookieExpired {
 			continue
 		}
 		wanted = append(wanted, model)
