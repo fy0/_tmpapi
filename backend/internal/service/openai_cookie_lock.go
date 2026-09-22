@@ -320,7 +320,7 @@ func (b *openAICookieBody) Read(p []byte) (int, error) {
 		return n, err
 	}
 	for {
-		i := strings.IndexByte(string(b.pending), '\n')
+		i := bytes.IndexByte(b.pending, '\n')
 		if i < 0 {
 			break
 		}

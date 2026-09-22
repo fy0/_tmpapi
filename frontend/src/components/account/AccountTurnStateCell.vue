@@ -485,8 +485,7 @@ const cookieTitle = computed(() => cookiePool.value.map((p) => t('admin.accounts
   pod: p.pod || '-', model: p.model || '-', served: p.last_seen_model || '-',
   expiry: typeof p.exp === 'number' ? formatDateTime(new Date(p.exp * 1000)) : '-',
   status: t(cookieUsable(p) ? 'admin.accounts.openai.cookieReady' : 'admin.accounts.openai.cookieUnavailable')
-})).join('
-'))
+})).join('\n'))
 
 const hunterMaxPerHour = computed<number | null>(() => {
   const raw = extra.value['openai_turn_state_hunter']
