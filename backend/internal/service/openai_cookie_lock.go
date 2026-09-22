@@ -395,7 +395,11 @@ func nextOpenAICookieRenewal(pool []openAICookieCandidate, model string, now tim
 
 // Allow two ticks to renew before expiry, including when the configured lead is one minute.
 func openAICookieRenewLead(cfg openAITurnStateHunterConfig) time.Duration {
-	return max(cfg.lead(), 2*openAITurnStateHunterInterval)
+	lead := cfg.lead()
+	if minimum := 2 * openAITurnStateHunterInterval; lead < minimum {
+		return minimum
+	}
+	return lead
 }
 
 // Discovery backoff must leave room for renewal of cookies already in the pool.
