@@ -1484,6 +1484,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 	s.applyOpenAICodexTurnStateOverrideHeader(c, account, req.Header)
+	req = attachOpenAICookieRequest(c, account, req)
 	if err := openAITurnStateHoldError(c); err != nil {
 		return nil, err
 	}

@@ -70,6 +70,7 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	// turn-state 自动接管的候选池是运行态数据，上游每铸出一条健康 blob 就写一次，
 	// 不参与调度决策——不放进来的话每次响应都要重建一次调度快照。
 	"openai_turn_state_pool": {},
+	"openai_cookie_pool":     {},
 	// 每个模型最近一次观测到的 turn-state 形态，所有 Codex 账号的响应路径上都会写
 	// （带节流），纯展示不参与调度。
 	"openai_turn_state_observed": {},

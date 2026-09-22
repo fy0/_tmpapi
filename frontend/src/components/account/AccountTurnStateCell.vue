@@ -81,6 +81,11 @@
           : t('admin.accounts.openai.turnStatePool.summaryObservedOnly', { n: entries.length })
       }}
     </p>
+    <p v-if="cookieLocked" class="text-[10px]" data-testid="account-cookie-lock"
+      :class="cookieUsableCount ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'"
+      :title="cookieTitle">
+      {{ cookieUsableCount ? t('admin.accounts.openai.cookiePoolSummary', { n: cookieUsableCount }) : t('admin.accounts.openai.cookiePoolEmpty') }}
+    </p>
     <!-- 猎手状态：本小时用了几次、下次开窗、上次摇到什么。最近 10 次在 tooltip 里。
          只在猎手开着时渲染——没开的账号多一行「猎手 0/30」只是噪音。 -->
     <p
@@ -442,6 +447,8 @@ interface HuntAttempt {
   proxy?: string
   status?: number
   chars?: number
+  served_model?: string
+  oailb_host?: string
   healthy?: boolean
   latency_ms?: number
   exit?: string
@@ -457,6 +464,29 @@ interface HuntState {
   gate?: string
 }
 const TURN_STATE_HUNT_DEFAULT_MAX_PER_HOUR = 30
+
+interface CookieCandidate {
+  pod?: string
+  model?: string
+  last_seen_model?: string
+  exp?: number
+  failed?: boolean
+}
+const cookieLocked = computed(() => extra.value['openai_cookie_lock'] === true)
+const cookiePool = computed<CookieCandidate[]>(() => {
+  const raw = extra.value['openai_cookie_pool']
+  return Array.isArray(raw) ? raw.filter((item): item is CookieCandidate => !!item && typeof item === 'object') : []
+})
+const comparableCookieModel = (model?: string) => (model || '').trim().toLowerCase().replace(/^openai\//, '')
+const cookieUsable = (p: CookieCandidate) => !p.failed && typeof p.exp === 'number' && p.exp * 1000 > sharedNow.value &&
+  !!p.model && comparableCookieModel(p.model) === comparableCookieModel(p.last_seen_model)
+const cookieUsableCount = computed(() => cookiePool.value.filter(cookieUsable).length)
+const cookieTitle = computed(() => cookiePool.value.map((p) => t('admin.accounts.openai.cookiePoolItem', {
+  pod: p.pod || '-', model: p.model || '-', served: p.last_seen_model || '-',
+  expiry: typeof p.exp === 'number' ? formatDateTime(new Date(p.exp * 1000)) : '-',
+  status: t(cookieUsable(p) ? 'admin.accounts.openai.cookieReady' : 'admin.accounts.openai.cookieUnavailable')
+})).join('
+'))
 
 const hunterMaxPerHour = computed<number | null>(() => {
   const raw = extra.value['openai_turn_state_hunter']
@@ -488,7 +518,7 @@ const huntAttempts = computed<HuntAttempt[]>(() =>
  * 后端 runOnce 要求猎手开关与自动接管**同时**开着才跑（票靠接管注入，只猎不注是白烧
  * 额度）。只看猎手开关的话，接管关着时这行会写着「待命」，而猎手一次都不会运行。
  */
-const hunterNeedsAuto = computed(() => hunterMaxPerHour.value !== null && isManualMode.value)
+const hunterNeedsAuto = computed(() => hunterMaxPerHour.value !== null && isManualMode.value && !cookieLocked.value)
 
 // last_error 也算：「没有可用代理」这类错误不产生探测记录，只写 last_error。
 const hunterErrored = computed(
@@ -496,6 +526,10 @@ const hunterErrored = computed(
 )
 
 const hunterAttemptResult = (a: HuntAttempt) => {
+  if (a.served_model || a.oailb_host) return t('admin.accounts.openai.cookieHuntResult', {
+    status: t(a.healthy ? 'admin.accounts.openai.cookieReady' : 'admin.accounts.openai.cookieUnavailable'),
+    pod: a.oailb_host || '-', model: a.served_model || '-'
+  })
   if (a.error) return t('admin.accounts.openai.turnStatePool.hunterResultError', { status: a.status || '-', error: a.error })
   return t(
     a.healthy

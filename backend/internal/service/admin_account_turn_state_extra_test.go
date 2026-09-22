@@ -13,6 +13,7 @@ import (
 func turnStateRuntimeExtraPayload() map[string]any {
 	return map[string]any{
 		"custom":                        "value",
+		openAICookiePoolExtraKey:        []any{map[string]any{"cookie": "stale-cookie"}},
 		openAITurnStatePoolExtraKey:     []any{map[string]any{"blob": "not-mine", "model": "gpt-6-astra"}},
 		openAITurnStateHuntExtraKey:     map[string]any{"hour_count": -5},
 		openAITurnStateObservedExtraKey: map[string]any{"chars": 292},
@@ -29,7 +30,7 @@ func TestUpdateAccountExtraDropsTurnStateRuntimeKeys(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "value", repo.accounts[accountID].Extra["custom"])
-	for _, key := range []string{openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
+	for _, key := range []string{openAICookiePoolExtraKey, openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
 		require.NotContains(t, repo.accounts[accountID].Extra, key)
 	}
 }
@@ -48,7 +49,7 @@ func TestClearOpenAITurnStateRuntimeExtraNullsTheThreeKeys(t *testing.T) {
 	extra := repo.accounts[accountID].Extra
 	require.Equal(t, "value", extra["custom"])
 	// jsonb 顶层合并：写 null 而不是删键，读侧（readOpenAITurnStatePool 等）按空处理。
-	for _, key := range []string{openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
+	for _, key := range []string{openAICookiePoolExtraKey, openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
 		require.Nil(t, extra[key])
 	}
 	require.Empty(t, readOpenAITurnStatePool(repo.accounts[accountID]))
@@ -77,7 +78,7 @@ func TestBulkUpdateAccountsDropsTurnStateRuntimeKeys(t *testing.T) {
 	require.Equal(t, 2, result.Success)
 	require.Len(t, repo.bulkUpdates, 1)
 	require.Equal(t, "value", repo.bulkUpdates[0].Extra["custom"])
-	for _, key := range []string{openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
+	for _, key := range []string{openAICookiePoolExtraKey, openAITurnStatePoolExtraKey, openAITurnStateHuntExtraKey, openAITurnStateObservedExtraKey} {
 		require.NotContains(t, repo.bulkUpdates[0].Extra, key)
 	}
 }

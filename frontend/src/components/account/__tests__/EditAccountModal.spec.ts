@@ -2123,3 +2123,24 @@ describe('EditAccountModal 292 猎手', () => {
     wrapper.unmount()
   })
 })
+
+
+describe('EditAccountModal cookie lock', () => {
+  it('saves cookie-only mode and enables hunting with state takeover off', async () => {
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const account = buildOpenAIOAuthParentAccount()
+    account.extra = { openai_turn_state_auto: false }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    const hunter = wrapper.get('[data-testid="edit-openai-turn-state-hunter"]')
+    expect(hunter.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="edit-openai-cookie-lock"]').setValue(true)
+    expect(hunter.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="edit-openai-turn-state-hunter-needs-auto"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({ openai_cookie_lock: true, openai_turn_state_auto: false })
+    wrapper.unmount()
+  })
+})

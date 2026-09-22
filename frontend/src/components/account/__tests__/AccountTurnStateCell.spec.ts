@@ -561,3 +561,28 @@ describe('AccountTurnStateCell', () => {
     })
   })
 })
+
+
+describe('AccountTurnStateCell cookie lock', () => {
+  it('shows usable pods and actual models without exposing cookies or requiring state', () => {
+    const acc = account([], {
+      openai_turn_state_auto: false, openai_cookie_lock: true,
+      openai_turn_state_hunter: { enabled: true },
+      openai_cookie_pool: [
+        { pod: 'pod-a', cookie: 'secret-a', model: 'gpt-6-astra', last_seen_model: 'gpt-6-astra', exp: nowSec + 3600 },
+        { pod: 'pod-b', cookie: 'secret-b', model: 'gpt-6-astra', last_seen_model: 'gpt-5.6-luna', exp: nowSec + 3600, failed: true },
+        { pod: 'pod-c', model: 'gpt-6-astra', last_seen_model: 'gpt-6-astra', exp: nowSec - 1 }
+      ],
+      openai_turn_state_hunt: { last: [{ served_model: 'gpt-6-astra', oailb_host: 'pod-a', healthy: true }] }
+    })
+    acc.type = 'oauth'
+    const w = render(acc)
+    const status = w.get('[data-testid="account-cookie-lock"]')
+    expect(status.text()).toContain('"n":1')
+    expect(status.attributes('title')).toContain('gpt-5.6-luna')
+    expect(w.html()).not.toContain('secret-a')
+    expect(w.get('[data-testid="account-turn-state-hunter"]').text()).not.toContain('hunterNeedsAuto')
+    expect(w.get('[data-testid="account-turn-state-hunter"]').text()).toContain('pod-a')
+    w.unmount()
+  })
+})

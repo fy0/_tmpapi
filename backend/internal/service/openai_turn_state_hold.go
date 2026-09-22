@@ -122,7 +122,7 @@ func (s *OpenAIGatewayService) holdOpenAITurnStateIfUnfilled(c *gin.Context, acc
 		return
 	}
 	now := time.Now()
-	if c.Request != nil {
+	if c.Request != nil && !account.IsOpenAICookieLockEnabled() {
 		inbound := strings.TrimSpace(c.Request.Header.Get(openAICodexTurnStateHeader))
 		if inbound != "" && openAITurnStateHealthy(inbound) && !s.openAICodexTurnStateMintedByOther(c, account, inbound) {
 			if minted := openAITurnStateMintedAt(inbound, time.Time{}); !minted.IsZero() && now.Before(minted.Add(account.openAITurnStateStaleAfter())) {
@@ -131,6 +131,7 @@ func (s *OpenAIGatewayService) holdOpenAITurnStateIfUnfilled(c *gin.Context, acc
 		}
 	}
 	c.Set(ctxKeyTurnStateHold, model)
+	c.Set("openai_cookie_hold", account.IsOpenAICookieLockEnabled())
 	// 已经停着（快照更新前的并发请求、绕过调度过滤的粘性会话）：只换号，别再各写一次库、各刷一次快照。
 	if s.accountRepo == nil || openAITurnStateModelHeld(account, model, now) {
 		return
@@ -156,11 +157,15 @@ func openAITurnStateHoldError(c *gin.Context) error {
 	if model == "" {
 		return nil
 	}
+	message := fmt.Sprintf("account has no healthy x-codex-turn-state for %s and is paused until the hunter finds one", model)
+	if c.GetBool("openai_cookie_hold") {
+		message = fmt.Sprintf("account has no healthy routing cookie for %s and is paused until the hunter finds one", model)
+	}
 	return &UpstreamFailoverError{
 		StatusCode:       http.StatusServiceUnavailable,
 		Reason:           OpenAITurnStateHoldReason,
 		ClientStatusCode: http.StatusServiceUnavailable,
-		ClientMessage:    fmt.Sprintf("account has no healthy x-codex-turn-state for %s and is paused until the hunter finds one", model),
+		ClientMessage:    message,
 	}
 }
 
@@ -175,8 +180,12 @@ func (s *OpenAITurnStateHunterService) syncHold(ctx context.Context, account *Ac
 	for _, model := range openAITurnStateHeldModels(account, now) {
 		release := ""
 		switch {
-		case account.Status != StatusActive || !account.IsOpenAITurnStateAutoEnabled() || !s.gateway.openAITurnStateHoldEnabled(account, model):
+		case account.Status != StatusActive || !account.openAITicketInjectionEnabled() || !s.gateway.openAITurnStateHoldEnabled(account, model):
 			release = "hold disabled"
+		case account.IsOpenAICookieLockEnabled():
+			if _, ok := pickOpenAICookie(s.gateway.loadOpenAICookiePoolFresh(ctx, account), model, now); ok {
+				release = "cookie pooled"
+			}
 		default:
 			if !poolLoaded {
 				pool, poolLoaded = s.gateway.loadOpenAITurnStatePoolFresh(ctx, account), true

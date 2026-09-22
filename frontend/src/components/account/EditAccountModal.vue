@@ -2437,24 +2437,32 @@
           </div>
           <!-- 292 猎手：只对直连 ChatGPT 的 oauth / setup-token 账号开放（cpr 的出口由
                codex-proxy-rs 决定，换代理换不到出口）。依赖自动接管：票只入池不注入等于白猎。 -->
+          <div v-if="accountSupportsTurnStateHunter" class="flex items-center justify-between gap-4">
+            <div class="min-w-0">
+              <label class="input-label mb-0">{{ t('admin.accounts.openai.cookieLock') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.cookieLockDesc') }}</p>
+            </div>
+            <input v-model="openAICookieLock" data-testid="edit-openai-cookie-lock" type="checkbox"
+              class="h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          </div>
           <div v-if="accountSupportsTurnStateHunter" class="space-y-2" data-testid="edit-openai-turn-state-hunter-section">
             <div class="flex items-center justify-between gap-4">
               <div class="min-w-0">
                 <label class="input-label mb-0">{{ t('admin.accounts.openai.turnStateHunter') }}</label>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.accounts.openai.turnStateHunterDesc') }}
+                  {{ t(openAICookieLock ? 'admin.accounts.openai.cookieHunterDesc' : 'admin.accounts.openai.turnStateHunterDesc') }}
                 </p>
               </div>
               <input
                 v-model="openAITurnStateHunter.enabled"
                 data-testid="edit-openai-turn-state-hunter"
                 type="checkbox"
-                :disabled="!openAITurnStateAuto"
+                :disabled="!openAITurnStateAuto && !openAICookieLock"
                 class="h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
             <p
-              v-if="!openAITurnStateAuto"
+              v-if="!openAITurnStateAuto && !openAICookieLock"
               data-testid="edit-openai-turn-state-hunter-needs-auto"
               class="text-xs text-amber-600 dark:text-amber-400"
             >
@@ -3943,6 +3951,9 @@ const openAITurnStateOverrideValidity = computed(() => {
 const cprOutboundProxy = computed(() => readCPROutboundProxy(props.account))
 
 // 自动接管：开了之后手填值不再生效，由系统用候选池里最近一条 292 顶替 312。
+const openAICookieLock = ref(false)
+const readOpenAICookieLock = (extra: unknown): boolean =>
+  (extra as Record<string, unknown> | undefined)?.openai_cookie_lock === true
 const openAITurnStateAuto = ref(false)
 const readOpenAITurnStateAuto = (extra: unknown): boolean =>
   (extra as Record<string, unknown> | undefined)?.openai_turn_state_auto === true
@@ -4677,6 +4688,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
 	openAITurnStateOverrides.value = readOpenAITurnStateOverrides(extra)
 	openAITurnStateAuto.value = readOpenAITurnStateAuto(extra)
+	openAICookieLock.value = readOpenAICookieLock(extra)
 	openAITurnStateHunter.value = readOpenAITurnStateHunter(extra)
 	openAITurnStateRecovery.value = readOpenAITurnStateRecovery(extra)
 	turnStateHunterProxiesLoaded.value = false
@@ -6497,6 +6509,14 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_turn_state_auto
       }
+      updatePayload.extra = newExtra
+    }
+
+    if (accountSupportsTurnStateHunter.value && openAICookieLock.value !== readOpenAICookieLock(props.account.extra)) {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (openAICookieLock.value) newExtra.openai_cookie_lock = true
+      else delete newExtra.openai_cookie_lock
       updatePayload.extra = newExtra
     }
 

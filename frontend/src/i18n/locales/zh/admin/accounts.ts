@@ -784,10 +784,19 @@ export default {
         turnStateAutoTakeover: '已由自动接管',
         turnStateModelsEmpty: '(拉不到模型列表)',
         turnStateOverrideConfigured: '已配票的模型：{models}',
-        turnStateHunter: '292 猎手',
+        cookieLock: 'Cookie 锁定',
+        cookieLockDesc: '独立锁定当前实际响应模型匹配的 pod，可关闭 state 自动接管并清空手填 state。按账号维护 Cookie 池；HTTP 请求生效，JWT 到期或实际模型变化时换池。无可用 Cookie 时默认放行；开启降智暂停则换号或返回 503。',
+        cookieHunterDesc: '从所选代理采样不同 pod，以 response.created 的实际模型匹配为命中条件，最多补足 3 个健康 pod。到期前至少 2 分钟携同 Cookie 尝试续约；沿用小时限额、请求间隔和空闲门槛。pod 健康状态随响应更新，不做 7 天出口冷却。',
+        cookiePoolEmpty: 'Cookie 锁定：暂无可用候选',
+        cookiePoolSummary: 'Cookie 锁定：{n} 个可用候选',
+        cookiePoolItem: '{pod} · 请求 {model} → 实际 {served} · 到期 {expiry} · {status}',
+        cookieReady: '可用',
+        cookieUnavailable: '已失效或过期',
+        cookieHuntResult: '{status} · {pod} → {model}',
+        turnStateHunter: '打票猎手',
         turnStateHunterDesc:
           '票到期前开窗，经勾选的代理逐个开新会话探测，摇到 292 即入池交给自动接管注入；探测响应头到手即断，主要成本是每次探测的输入 token（含该模型的 base prompt）。开着猎手时池里有票就对所有会话注入。每小时有上限；空闲门槛内没有真实请求的模型不猎。每次探测都新建一条代理连接，webshare 的 -rotate 端点因此每次换出口；其余代理按固定出口处理：探测前先解析出口 IP，同一出口只探一次，铸出 312 的出口 7 天内不再探。',
-        turnStateHunterNeedsAuto: '需要先开启自动接管，否则猎手不会运行',
+        turnStateHunterNeedsAuto: '需要先开启 state 自动接管或 Cookie 锁定，否则猎手不会运行',
         turnStateHunterInvalid: '猎手开着时必须选择模型（最多 8 个，或勾「按真实请求自动」）和代理（最多 64 个）',
         turnStateHunterAutoModels: '按真实请求自动定模型（空闲窗口内有真实请求、且上游给它铸过 turn-state 的模型都猎；画图模型不参与；勾上后上面手选的忽略）',
         turnStateHunterEffortDefault: '默认（high）',
@@ -804,7 +813,7 @@ export default {
           '填了就把每次 200 探测按标准用量路径记到这把 key 下（类型「猎手探测」，正常计费扣额度、刷新最近使用）；输入 token 为本地估算（含 base prompt），输出恒 0。建议用一把专用 key：它的额度/限流会被探测消耗，订阅型分组要有有效订阅才记。',
         turnStateHunterHold: '降智时暂停调度',
         turnStateHunterHoldDesc:
-          '要猎的模型拿不出可注入的 292 时，把该模型在本账号上暂停一个空闲窗口（idle_minutes）并让该请求换号（没有别的号就报 503）；到期后下一条请求还缺票就再暂停，猎到新票立即恢复。开着的时候还会看实际响应模型：手里有票，但这条真实请求的模型突然对不上所请求的模型，当前票也作废。其它模型不受影响；没人再请求的模型到期后自然结束。',
+          '要猎的模型拿不出可用的 state 或 Cookie 时，把该模型在本账号上暂停一个空闲窗口（idle_minutes）并让该请求换号（没有别的号就报 503）；到期后下一条请求还缺票就再暂停，猎到新票立即恢复。开着的时候还会看实际响应模型：手里有票，但这条真实请求的模型突然对不上所请求的模型，当前票也作废。其它模型不受影响；没人再请求的模型到期后自然结束。',
         turnStateRecovery: '降智恢复探测',
         turnStateRecoveryDesc:
           '用账号自己的出口每隔一段不固定的时间探一次，连续若干次铸出 292 就判定降智已恢复并打上标记；连续同样多次失败则进入冷却。独立于猎手（猎手关着也能开），只标记与记日志，不会自动改任何配置。判定后停止探测，真实流量再铸出 312 就清掉标记重新攒。',
@@ -834,7 +843,7 @@ export default {
           hunterGateIdle: '无流量·暂停',
           hunterGateHeld: '降智暂停·补票中',
           hunterGateFresh: '票未到期',
-          hunterNeedsAuto: '猎手 未生效：需先开自动接管',
+          hunterNeedsAuto: '猎手 未生效：需先开 state 自动接管或 Cookie 锁定',
           // `@` 是 vue-i18n 的链接消息前缀，裸写会在生产构建里抛 SyntaxError 并整块吞掉
           // 账号列的 Turn-State 格子；字面量要用 {'@'}。
           hunterLast: "上次 {result} {'@'}{proxy} {time}",

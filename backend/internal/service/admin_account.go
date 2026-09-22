@@ -706,6 +706,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// turn-state 候选池由网关在响应路径上维护（含 Failed 标记）。管理端提交的
 		// extra 是打开弹窗那一刻的快照，不剔掉就会把失效候选复活、甚至整池清空。
 		delete(normalizedExtra, openAITurnStatePoolExtraKey)
+		delete(normalizedExtra, openAICookiePoolExtraKey)
 		// 猎手运行态同理：小时计数、退避、出口冷却都在网关侧维护，快照回写会把它们全部倒回。
 		delete(normalizedExtra, openAITurnStateHuntExtraKey)
 		// 形态观测也是网关写的运行态：快照回写会把「最近铸出」倒回打开弹窗那一刻。
@@ -726,6 +727,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			OllamaCloudUsageSnapshotExtraKey,
 			OpenAIAutoResetCreditStateExtraKey,
 			openAITurnStatePoolExtraKey,
+			openAICookiePoolExtraKey,
 			openAITurnStateHuntExtraKey,
 			openAITurnStateObservedExtraKey,
 		} {
@@ -952,6 +954,7 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	// turn-state 运行态只由网关/猎手维护，与 UpdateAccount 同一份剔除名单：
 	// 不剔的话一次重授权就能把别的账号的候选池写进来（跨凭证域回放）。
 	delete(updates, openAITurnStatePoolExtraKey)
+	delete(updates, openAICookiePoolExtraKey)
 	delete(updates, openAITurnStateHuntExtraKey)
 	delete(updates, openAITurnStateObservedExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
@@ -975,6 +978,7 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 func (s *adminServiceImpl) ClearOpenAITurnStateRuntimeExtra(ctx context.Context, id int64) error {
 	return s.accountRepo.UpdateExtra(ctx, id, map[string]any{
 		openAITurnStatePoolExtraKey:     nil,
+		openAICookiePoolExtraKey:        nil,
 		openAITurnStateHuntExtraKey:     nil,
 		openAITurnStateObservedExtraKey: nil,
 	})
@@ -1006,6 +1010,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
 	// 批量最狠：payload 里混进一份候选池会被写进每一个目标账号。
 	delete(input.Extra, openAITurnStatePoolExtraKey)
+	delete(input.Extra, openAICookiePoolExtraKey)
 	delete(input.Extra, openAITurnStateHuntExtraKey)
 	delete(input.Extra, openAITurnStateObservedExtraKey)
 

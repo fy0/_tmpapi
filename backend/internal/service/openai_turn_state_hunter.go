@@ -102,7 +102,9 @@ const (
 //
 // 数值 0 表示取默认；idle_minutes 显式写负数表示「不设空闲门槛」。
 type openAITurnStateHunterConfig struct {
-	Enabled bool `json:"enabled"`
+	Enabled     bool `json:"enabled"`
+	cookieMode  bool
+	renewCookie *openAICookieCandidate
 	// Models 手选的要猎模型；AutoModels 为真时忽略。
 	Models   []string `json:"models"`
 	ProxyIDs []int64  `json:"proxy_ids"`
@@ -227,6 +229,7 @@ func readOpenAITurnStateHunterConfig(a *Account) (openAITurnStateHunterConfig, b
 		return cfg, false
 	}
 	cfg.applyDefaults()
+	cfg.cookieMode = a.IsOpenAICookieLockEnabled()
 	return cfg, true
 }
 
@@ -277,13 +280,16 @@ func (s *OpenAIGatewayService) openAITurnStateHuntedModel(a *Account, model stri
 
 // openAITurnStateHuntAttempt 是最近一次探测的记录，账号页 tooltip 直接展示。
 type openAITurnStateHuntAttempt struct {
-	At      time.Time `json:"at"`
-	Model   string    `json:"model"`
-	ProxyID int64     `json:"proxy_id"`
-	Proxy   string    `json:"proxy"`
-	Status  int       `json:"status"`
-	Chars   int       `json:"chars"`
-	Healthy bool      `json:"healthy"`
+	At          time.Time `json:"at"`
+	Model       string    `json:"model"`
+	ProxyID     int64     `json:"proxy_id"`
+	Proxy       string    `json:"proxy"`
+	Status      int       `json:"status"`
+	Chars       int       `json:"chars"`
+	Healthy     bool      `json:"healthy"`
+	ServedModel string    `json:"served_model,omitempty"`
+	OailbHost   string    `json:"oailb_host,omitempty"`
+	Renewal     bool      `json:"renewal,omitempty"`
 	// LatencyMs 是响应头到手的耗时（实测 0.5–2.3s）：探测在这一刻就断，后面不再计时。
 	LatencyMs int64 `json:"latency_ms"`
 	// Exit 是探测前解析到的出口 IP，只有固定出口有；轮换端点由供应商按连接选出口，为空。
@@ -622,7 +628,7 @@ func (s *OpenAITurnStateHunterService) runOnce(ctx context.Context) {
 		// 门槛会自己刹车；显式 idle_minutes=-1 表示用户就是要它一直猎。
 		// 池耗尽停号走的是 SetError（status=error），ListByPlatform 直接就不返回它——那条路
 		// 要人工关接管再启用，猎手救不了。
-		if account.Status != StatusActive || !account.IsOpenAITurnStateHunterEnabled() || !account.IsOpenAITurnStateAutoEnabled() {
+		if account.Status != StatusActive || !account.IsOpenAITurnStateHunterEnabled() || !account.openAITicketInjectionEnabled() {
 			continue
 		}
 		if sess := s.openHunt(ctx, account); sess != nil {
@@ -651,6 +657,7 @@ type openAITurnStateHuntSession struct {
 	struckOut int
 	probed    int
 	readyAt   time.Time
+	renewed   map[string]bool
 }
 
 // openHunt 算一个账号这轮要不要猎、猎哪些模型；不猎返回 nil（并按需留痕）。
@@ -693,7 +700,7 @@ func (s *OpenAITurnStateHunterService) openHunt(ctx context.Context, account *Ac
 	}
 	return &openAITurnStateHuntSession{
 		account: account, cfg: cfg, st: st, proxies: proxies, pending: wanted,
-		used: make(map[int64]bool, len(proxies)), strikes: make(map[int64]int, len(proxies)), readyAt: now,
+		used: make(map[int64]bool, len(proxies)), strikes: make(map[int64]int, len(proxies)), readyAt: now, renewed: make(map[string]bool),
 	}
 }
 
@@ -768,6 +775,19 @@ func (s *OpenAITurnStateHunterService) modelsNeedingTicket(ctx context.Context, 
 	}
 	if len(active) == 0 {
 		return nil, openAITurnStateHuntGateIdle
+	}
+	if cfg.cookieMode {
+		pool := s.gateway.loadOpenAICookiePoolFresh(ctx, account)
+		wanted := make([]string, 0, len(active))
+		for _, model := range active {
+			if !openAICookiePoolFresh(pool, model, now, openAICookieRenewLead(cfg)) {
+				wanted = append(wanted, model)
+			}
+		}
+		if len(wanted) == 0 {
+			return nil, openAITurnStateHuntGateFresh
+		}
+		return wanted, ""
 	}
 	pool := s.gateway.loadOpenAITurnStatePoolFresh(ctx, account)
 	ttl := account.openAITurnStateStaleAfter()
@@ -871,17 +891,29 @@ func (s *OpenAITurnStateHunterService) huntStep(ctx context.Context, sess *openA
 			continue // 不算额度、不睡：换下一个出口
 		}
 		model := sess.pending[0]
-		attempt := s.probe(ctx, account, model, cfg, proxy)
+		probeCfg := cfg
+		if cfg.cookieMode {
+			if sess.renewed == nil {
+				sess.renewed = map[string]bool{}
+			}
+			pool := s.gateway.loadOpenAICookiePoolFresh(ctx, account)
+			probeCfg.renewCookie = nextOpenAICookieRenewal(pool, model, s.now(), openAICookieRenewLead(cfg), sess.renewed)
+			if probeCfg.renewCookie != nil {
+				sess.renewed[model+"/"+probeCfg.renewCookie.Pod] = true
+			}
+		}
+		attempt := s.probe(ctx, account, model, probeCfg, proxy)
 		attempt.Exit = exit
 		sess.probed++
 		st.push(attempt)
 		slog.Info("openai_turn_state_hunt_attempt",
 			"account_id", account.ID, "model", model, "proxy_id", proxy.ID, "proxy", proxy.Name, "exit", exit,
 			"status", attempt.Status, "chars", attempt.Chars, "healthy", attempt.Healthy, "error", attempt.Error,
+			"oailb_host", attempt.OailbHost, "served_model", attempt.ServedModel, "renewal", attempt.Renewal,
 			"latency_ms", attempt.LatencyMs, "hour_count", st.HourCount)
 		if attempt.preflight {
 			// 请求没发出去：不是出口的问题，换代理重试只会把同一条错误抄 N 遍。
-			st.NextAt = s.now().Add(cfg.retry())
+			st.NextAt = s.cookieRetryAt(ctx, account, cfg, s.now())
 			s.persist(ctx, account, *st)
 			return true
 		}
@@ -911,7 +943,15 @@ func (s *OpenAITurnStateHunterService) huntStep(ctx context.Context, sess *openA
 			break // 代理都出局了 / 等不到重试：走下面的退避
 		}
 		sess.strikes[proxy.ID] = 0
-		if attempt.Healthy {
+		filled := attempt.Healthy
+		if cfg.cookieMode {
+			pool := s.gateway.loadOpenAICookiePoolFresh(ctx, account)
+			filled = openAICookiePoolFresh(pool, model, s.now(), openAICookieRenewLead(cfg))
+			if attempt.Renewal {
+				delete(sess.used, proxy.ID)
+			}
+		}
+		if filled {
 			sess.pending = sess.pending[1:]
 		} else {
 			sess.pending = append(sess.pending[1:], model)
@@ -944,7 +984,7 @@ func (s *OpenAITurnStateHunterService) huntStep(ctx context.Context, sess *openA
 		s.persist(ctx, account, *st)
 		return true
 	}
-	st.NextAt = s.now().Add(cfg.retry())
+	st.NextAt = s.cookieRetryAt(ctx, account, cfg, s.now())
 	s.persist(ctx, account, *st)
 	return true
 }
@@ -958,10 +998,10 @@ func (s *OpenAITurnStateHunterService) huntSessionCurrent(ctx context.Context, s
 	if err != nil || latest == nil {
 		return true
 	}
-	if latest.Status != StatusActive || !latest.IsOpenAITurnStateHunterEnabled() || !latest.IsOpenAITurnStateAutoEnabled() {
+	if latest.Status != StatusActive || !latest.IsOpenAITurnStateHunterEnabled() || !latest.openAITicketInjectionEnabled() {
 		return false
 	}
-	return openAITurnStateHunterConfigJSON(latest) == openAITurnStateHunterConfigJSON(sess.account)
+	return latest.IsOpenAICookieLockEnabled() == sess.cfg.cookieMode && openAITurnStateHunterConfigJSON(latest) == openAITurnStateHunterConfigJSON(sess.account)
 }
 
 func openAITurnStateHunterConfigJSON(a *Account) string {
@@ -979,7 +1019,7 @@ func openAITurnStateHunterConfigJSON(a *Account) string {
 // 也不用判（每次都是新出口）。解析走 exitProber 的独立连接：固定出口不管哪条连接都是
 // 同一个 IP，所以回声看到的就是探测会用的。一轮内每个固定代理只到这里一次（used 保证）。
 func (s *OpenAITurnStateHunterService) resolveHuntExit(ctx context.Context, cfg openAITurnStateHunterConfig, st *openAITurnStateHuntState, proxy Proxy) (exit string, cooling bool) {
-	if openAITurnStateHuntProxyRotating(cfg, proxy) {
+	if cfg.cookieMode || openAITurnStateHuntProxyRotating(cfg, proxy) {
 		return "", false
 	}
 	now := s.now()
@@ -1093,6 +1133,14 @@ func (s *OpenAITurnStateHunterService) doProbe(ctx context.Context, account, egr
 		attempt.preflight = true
 		return
 	}
+	if cfg.cookieMode {
+		req.Header.Del(openAICodexTurnStateHeader)
+		req.Header.Del("Cookie")
+		if cfg.renewCookie != nil {
+			req.Header.Set("Cookie", cfg.renewCookie.header())
+			attempt.Renewal = true
+		}
+	}
 	req.Close = closeConn
 	started := time.Now()
 	// 直接走 httpUpstream，不经 doOpenAIUpstream 的插件路径：插件协议不携带 req.Close，
@@ -1111,6 +1159,36 @@ func (s *OpenAITurnStateHunterService) doProbe(ctx context.Context, account, egr
 		attempt.Error = sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(peek)))
 		if attempt.Error == "" {
 			attempt.Error = http.StatusText(resp.StatusCode)
+		}
+		return
+	}
+	if cfg.cookieMode {
+		attempt.ServedModel = readOpenAICookieProbeModel(resp.Body)
+		attempt.LatencyMs = time.Since(started).Milliseconds()
+		_ = resp.Body.Close()
+		defer s.recordProbeUsage(probeCtx, account, cfg, c, req, resp.Header, attempt)
+		state := openAICookieRequest{model: model, started: started}
+		if cfg.renewCookie != nil {
+			state.sent = *cfg.renewCookie
+		}
+		candidate, issued := parseOpenAICookieJWT(parseOpenAITurnStateRouteCookies(resp.Header).oailb, time.Now())
+		if issued {
+			attempt.OailbHost = candidate.Pod
+		} else {
+			attempt.OailbHost = state.sent.Pod
+		}
+		attempt.Chars = len(extractOpenAICodexTurnState(resp.Header))
+		s.gateway.observeOpenAICookieResponse(probeCtx, account, state, resp.Header, attempt.ServedModel)
+		for _, pooled := range s.gateway.loadOpenAICookiePoolFresh(probeCtx, account) {
+			if pooled.Pod == attempt.OailbHost && pooled.usable(model, time.Now()) && attempt.ServedModel != "" && openAITurnStateComparableModel(attempt.ServedModel) == openAITurnStateComparableModel(model) {
+				attempt.Healthy = true
+				break
+			}
+		}
+		if attempt.ServedModel == "" {
+			attempt.Error = "no response.created model in response"
+		} else if attempt.OailbHost == "" {
+			attempt.Error = "no valid __oailb in response"
 		}
 		return
 	}
@@ -1286,6 +1364,9 @@ func openAITurnStateImageModel(model string) bool {
 func (s *OpenAIGatewayService) openAITurnStateAutoHuntable(a *Account, model string) bool {
 	if s == nil || a == nil || openAITurnStateImageModel(model) {
 		return false
+	}
+	if a.IsOpenAICookieLockEnabled() {
+		return true
 	}
 	key := openAITurnStateTrafficKey(a.ID, model)
 	if _, minted := s.openaiTurnStateMinted.Load(key); minted {

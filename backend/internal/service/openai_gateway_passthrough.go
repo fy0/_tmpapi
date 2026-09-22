@@ -681,6 +681,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 剥离后再出站（openai_codex_turn_state.go）。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 	s.applyOpenAICodexTurnStateOverrideHeader(c, account, req.Header)
+	req = attachOpenAICookieRequest(c, account, req)
 	if err := openAITurnStateHoldError(c); err != nil {
 		return nil, err
 	}

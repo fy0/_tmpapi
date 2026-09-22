@@ -403,6 +403,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnStateOverrideHeader(c *gin.Co
 	// 记下本次真正出站的值（可能来自客户端回带，也可能是刚注入的）。
 	markOpenAITurnStateSent(c, account, h.Get(openAICodexTurnStateHeader))
 	s.applyOpenAITurnStateRouteCookie(c, account, h)
+	s.applyOpenAICookieLock(c, account, h)
 }
 
 // ValidateOpenAITurnStateAutoExtra 校验自动接管的配置键。
@@ -413,9 +414,11 @@ func ValidateOpenAITurnStateAutoExtra(extra map[string]any) error {
 	if extra == nil {
 		return nil
 	}
-	if raw, ok := extra[openAITurnStateAutoExtraKey]; ok && raw != nil {
-		if _, ok := raw.(bool); !ok {
-			return fmt.Errorf("%s must be a boolean", openAITurnStateAutoExtraKey)
+	for _, key := range []string{openAITurnStateAutoExtraKey, openAICookieLockExtraKey} {
+		if raw, ok := extra[key]; ok && raw != nil {
+			if _, ok := raw.(bool); !ok {
+				return fmt.Errorf("%s must be a boolean", key)
+			}
 		}
 	}
 	return nil

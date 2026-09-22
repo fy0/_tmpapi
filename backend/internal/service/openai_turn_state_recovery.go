@@ -272,7 +272,7 @@ func (s *OpenAITurnStateHunterService) probeOwnExit(ctx context.Context, account
 		usageKeyID = hunter.UsageAPIKeyID
 	}
 	s.doProbe(ctx, account, &egress, proxyURL, false, model,
-		openAITurnStateHunterConfig{ReasoningEffort: cfg.ReasoningEffort, UsageAPIKeyID: usageKeyID}, &attempt)
+		openAITurnStateHunterConfig{ReasoningEffort: cfg.ReasoningEffort, UsageAPIKeyID: usageKeyID, cookieMode: account.IsOpenAICookieLockEnabled()}, &attempt)
 	return attempt
 }
 

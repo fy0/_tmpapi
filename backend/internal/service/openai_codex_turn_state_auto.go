@@ -412,6 +412,7 @@ func clearOpenAITurnStateInjected(c *gin.Context) {
 		c.Set(ctxKeyTurnStateInjected, "")
 		c.Set(ctxKeyTurnStateSource, "")
 		c.Set(ctxKeyTurnStateHold, "")
+		c.Set("openai_cookie_hold", false)
 	}
 }
 
