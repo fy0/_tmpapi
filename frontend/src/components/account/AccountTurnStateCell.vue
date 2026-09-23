@@ -227,7 +227,7 @@ interface ShapeObservation {
 }
 
 /**
- * 三个源归一后的一行。带 blob 的两个源（候选池 / 手填）在这里就折成 chars + healthy，
+ * 三个源归一后的一行。带 blob 的两个源（候选池 / 手填）在这里就折成 chars + verdict，
  * 与只有形态的观测源对齐——下游只用得着这两个值，留着 blob 只会让渲染路径多一条
  * 「这一行有没有 blob」的分支。
  *
@@ -238,7 +238,7 @@ interface ShapeObservation {
 interface PoolTicket {
   model: string
   chars: number
-  healthy: boolean
+  verdict: TurnStateVerdict
   mintedAt: Date
   active: boolean
 }
@@ -667,6 +667,8 @@ const hunterTitle = computed(() =>
 )
 
 /**
+ * 已废弃（2026-09-23，判据是「连续 N 次 292」，已失效）：只保留展示，后续版本移除。
+ *
  * 降智恢复探测（extra.openai_turn_state_recovery / _state）：走账号自己的出口、间隔随机，
  * 每次出一道糖果题，最近 window 次里答对 success 次判定恢复。判定后后端停止探测，
  * 所以这行改说「已恢复」而不是下次窗口。

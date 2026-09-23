@@ -763,7 +763,7 @@ export default {
         turnStateHunterHold: 'Pause scheduling while degraded',
         turnStateHunterHoldDesc:
           'When a hunted model has no injectable 292, pause that model on this account for one idle window (idle_minutes) and fail the request over (503 if no other account); after expiry the next request re-pauses it if still no ticket, and a new ticket resumes it immediately. Other models are unaffected; a model nobody requests anymore simply expires.',
-        turnStateRecovery: 'Degradation recovery probe',
+        turnStateRecovery: 'Degradation recovery probe (deprecated)',
         turnStateRecoveryDesc:
           "Asks the candy puzzle through the account's own exit at randomized intervals (a healthy model answers 21, a degraded one 29/36); once at least 'successes' of the last 'window' answers are right the account is marked recovered, while 'window' consecutive failures start a cooldown. Independent of the hunter (works with the hunter off), it only records a marker and a log line and never changes any setting. Probing stops once marked, and a natural 312 from real traffic clears the marker.",
         turnStateRecoveryModel: 'Probe model',

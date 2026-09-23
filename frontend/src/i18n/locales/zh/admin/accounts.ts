@@ -870,7 +870,7 @@ export default {
         turnStateHunterHold: '降智时暂停调度',
         turnStateHunterHoldDesc:
           '要猎的模型拿不出可注入的 292 时，把该模型在本账号上暂停一个空闲窗口（idle_minutes）并让该请求换号（没有别的号就报 503）；到期后下一条请求还缺票就再暂停，猎到新票立即恢复。其它模型不受影响；没人再请求的模型到期后自然结束。',
-        turnStateRecovery: '降智恢复探测',
+        turnStateRecovery: '降智恢复探测（已废弃）',
         turnStateRecoveryDesc:
           '用账号自己的出口每隔一段不固定的时间出一道糖果题（正常模型答 21，降智答 29/36），最近「总次数」次里答对「成功次数」次就判定降智已恢复并打上标记；连续「总次数」次答错则进入冷却。独立于猎手（猎手关着也能开），只标记与记日志，不会自动改任何配置。判定后停止探测，真实流量再铸出 312 就清掉标记重新攒。',
         turnStateRecoveryModel: '探测模型',
