@@ -3,6 +3,8 @@ package repository
 import (
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 
 	"github.com/imroc/req/v3"
+	"golang.org/x/net/publicsuffix"
 )
 
 // reqClientOptions 定义 req 客户端的构建参数
@@ -173,5 +176,6 @@ func CreateCodexBackendReqClient(proxyURL string) (*req.Client, error) {
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL: proxyURL,
 		Timeout:  30 * time.Second,
+		Cookies:  reqCookiesChatGPTCloudflare,
 	})
 }
