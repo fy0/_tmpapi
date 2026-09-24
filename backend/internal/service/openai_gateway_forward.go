@@ -413,7 +413,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamModel == requestedModel &&
 		(!account.IsOpenAIOAuthLike() || upstreamModel != "gpt-5.5") &&
 		!isOpenAIImageGenerationModel(upstreamModel) &&
-		!isCompactRequest
+		!isExplicitOpenAICompactRequest(c, body)
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
 	liteFallbackInstructions := ""
