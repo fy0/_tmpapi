@@ -1,5 +1,11 @@
 # 开发日志
 
+## 2026-09-25 — klno 归档为 klno-legacy-2026-09-23
+
+- 原 klno（截至 0ac464828，基于上游 v0.2.7 的 klno.4 标签线）整体改名为 klno-legacy-2026-09-23，日期取最后一次补丁提交。
+- 新 klno 从 upstream/main（a3eb7ef30，v0.2.8 之后）重建，只携带 sync-upstream.yml 一份文件，保证 cron 的 main 重同步步骤能 checkout 到它。
+- 补丁尚未移植到新 klno；续接工作时以本分支为补丁来源。
+
 ## 2026-09-23 — 独立 Cookie 锁定打票
 
 - 增加每账号 `openai_cookie_lock` 开关和按 pod/请求模型分桶的 `openai_cookie_pool`。保留 state 路径，可以只锁定 Cookie。
