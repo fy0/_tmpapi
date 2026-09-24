@@ -1021,6 +1021,15 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		// 走网关报 no available accounts"。
 		"openai_passthrough",
 		"openai_oauth_passthrough",
+		// Basispoints 通道开关与随路配置必须进投影：Forward 在转发阶段读
+		// extra.openai_basispoints*，缺键会导致调度缓存里的账号静默退回
+		// chatgpt.com Codex 通道。
+		"openai_basispoints",
+		"openai_basispoints_model",
+		"openai_basispoints_url",
+		"openai_basispoints_timezone",
+		"openai_basispoints_tools_version_id",
+		"openai_basispoints_timeout_seconds",
 		"codex_fingerprint_mode",
 		"codex_fingerprint_seed",
 		"codex_5h_used_percent",
