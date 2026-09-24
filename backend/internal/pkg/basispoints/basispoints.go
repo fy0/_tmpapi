@@ -179,16 +179,6 @@ func firstString(object map[string]any, keys ...string) string {
 	return ""
 }
 
-func rawObject(raw []byte) (map[string]any, error) {
-	var object map[string]any
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&object); err != nil || object == nil {
-		return nil, fmt.Errorf("request body must be a JSON object")
-	}
-	return object, nil
-}
-
 func jsonBytes(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
@@ -210,11 +200,4 @@ func normalizeEffort(value any) string {
 		return s
 	}
 	return "medium"
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
 }

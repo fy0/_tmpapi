@@ -347,23 +347,16 @@ func itemText(value any) string {
 		var builder strings.Builder
 		for _, part := range list {
 			if text := stringValue(part); text != "" {
-				builder.WriteString(text)
+				_, _ = builder.WriteString(text)
 				continue
 			}
 			if object := objectValue(part); object != nil {
-				builder.WriteString(stringValue(object["text"]))
+				_, _ = builder.WriteString(stringValue(object["text"]))
 			}
 		}
 		return builder.String()
 	}
 	return ""
-}
-
-func conversationKey(source map[string]any, translated []any) string {
-	if explicit := explicitConversationKey(source); explicit != "" {
-		return explicit
-	}
-	return conversationFingerprint(translated)
 }
 
 func explicitConversationKey(source map[string]any) string {
@@ -434,17 +427,6 @@ func uuidV5(name string) string {
 	digest[6] = (digest[6] & 0x0f) | 0x50
 	digest[8] = (digest[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", digest[0:4], digest[4:6], digest[6:8], digest[8:10], digest[10:16])
-}
-
-func appendBeforeCompaction(items []any, injected []any) []any {
-	if len(items) > 0 {
-		if last := objectValue(items[len(items)-1]); last != nil && stringValue(last["type"]) == "compaction_trigger" {
-			result := append([]any{}, items[:len(items)-1]...)
-			result = append(result, injected...)
-			return append(result, items[len(items)-1])
-		}
-	}
-	return append(items, injected...)
 }
 
 func prependBeforeCompaction(items []any, prefix []any) []any {
@@ -537,12 +519,9 @@ func decodeTransportCode(value any) map[string]any {
 		return object
 	}
 	decoder := json.NewDecoder(strings.NewReader(text))
-	for {
-		var candidate map[string]any
-		if decoder.Decode(&candidate) == nil && candidate != nil {
-			return candidate
-		}
-		break
+	var candidate map[string]any
+	if decoder.Decode(&candidate) == nil && candidate != nil {
+		return candidate
 	}
 	return nil
 }
@@ -839,14 +818,14 @@ func SyntheticStream(response map[string]any) []byte {
 	completed := cloneObject(response)
 	completed["status"] = "completed"
 	writeSSE(&builder, "response.completed", map[string]any{"type": "response.completed", "response": completed})
-	builder.WriteString("data: [DONE]\n\n")
+	_, _ = builder.WriteString("data: [DONE]\n\n")
 	return []byte(builder.String())
 }
 
 func writeSSE(builder *strings.Builder, event string, value any) {
-	builder.WriteString("event: ")
-	builder.WriteString(event)
-	builder.WriteString("\ndata: ")
-	builder.Write(jsonBytes(value))
-	builder.WriteString("\n\n")
+	_, _ = builder.WriteString("event: ")
+	_, _ = builder.WriteString(event)
+	_, _ = builder.WriteString("\ndata: ")
+	_, _ = builder.Write(jsonBytes(value))
+	_, _ = builder.WriteString("\n\n")
 }
