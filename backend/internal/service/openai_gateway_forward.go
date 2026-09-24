@@ -195,6 +195,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		originalModel = reqModel
 	}
 
+	// Basispoints（Excel 插件画像）通道：extra.openai_basispoints 命中的账号把
+	// 基础 /responses 请求改送 bps.openai.com，绕过 chatgpt.com 的降智调度。
+	// compact / input_tokens 等子路径无对应上游端点，仍走原 Codex 通道。
+	if account.IsOpenAIBasisPointsEnabled() && openAIResponsesRequestPathSuffix(c) == "" {
+		SetActualOpenAIUpstreamEndpoint(c, openAIBasisPointsUpstreamEndpoint)
+		return s.forwardOpenAIBasisPoints(ctx, c, account, body, startTime)
+	}
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
