@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -33,7 +34,18 @@ const (
 
 	// defaultModel：参考实现默认 gpt-6-astra（bps 渠道的旗舰模型）。
 	defaultModel = "gpt-6-astra"
+
+	// BytesPerToken / DefaultMaxInputTokens：本地超限拒绝的估算系数与阈值
+	//（对齐参考实现 BYTES_PER_TOKEN=3、BPS_MAX_INPUT_TOKENS=300000）。
+	BytesPerToken         = 3
+	DefaultMaxInputTokens = 300000
 )
+
+// tokenBudgetRe 匹配 codex 泄露进上游流量的 context-window budget developer
+// 片段（"You have N tokens left in this context window"、<context_window>/
+// <context_window_guidance> 标签）。真 Excel 插件从不产生这些内容；不剥除
+// 等于用非 stock 窗口尺寸给请求打指纹。
+var tokenBudgetRe = regexp.MustCompile(`</?context_window(_guidance)?>|tokens left in this context window`)
 
 // dumps 对齐 Python json.dumps(ensure_ascii=False, separators=(",",":"))。
 // Go json.Marshal 对 map 键按字典序输出且 UTF-8 原样透传（仅转义 <>&），
@@ -366,6 +378,8 @@ func messageItem(role, text string) map[string]any {
 // translateMessageItem 按 role 归一化 content part：文本类 part 统一改为
 // input_text/output_text；input_image 保留给图片上传阶段；未知 part 类型
 // 替换为占位文本（对齐 translate_message_item）。
+// developer 条目额外剥除 token_budget 泄露片段；整条/全部 part 命中时返回
+// nil（调用方丢弃该 item）。
 func translateMessageItem(item map[string]any) map[string]any {
 	delete(item, "internal_chat_message_metadata_passthrough")
 	role := stringValue(item["role"])
@@ -375,6 +389,9 @@ func translateMessageItem(item map[string]any) map[string]any {
 	}
 	switch content := item["content"].(type) {
 	case string:
+		if role == "developer" && tokenBudgetRe.MatchString(content) {
+			return nil
+		}
 		item["content"] = []any{map[string]any{"type": ctype, "text": content}}
 	case []any:
 		fixed := make([]any, 0, len(content))
@@ -402,7 +419,22 @@ func translateMessageItem(item map[string]any) map[string]any {
 			}
 			fixed = append(fixed, p)
 		}
+		if role == "developer" {
+			kept := fixed[:0]
+			for _, p := range fixed {
+				if pm, ok := p.(map[string]any); ok {
+					if text, ok := pm["text"].(string); ok && tokenBudgetRe.MatchString(text) {
+						continue
+					}
+				}
+				kept = append(kept, p)
+			}
+			fixed = kept
+		}
 		item["content"] = fixed
+		if len(fixed) == 0 {
+			return nil
+		}
 	}
 	return item
 }
@@ -488,7 +520,9 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) []
 		case itype == "item_reference":
 			// dropped
 		case itype == "message" || stringValue(item["role"]) != "":
-			result = append(result, translateMessageItem(item))
+			if msg := translateMessageItem(item); msg != nil {
+				result = append(result, msg)
+			}
 		default:
 			result = append(result, item)
 		}
@@ -547,8 +581,10 @@ func cloneMap(m map[string]any) map[string]any {
 func normalizeEffortValue(value any) string {
 	s := strings.ToLower(stringValue(value))
 	switch s {
-	case "x-high", "extra-high", "extra_high":
+	case "x-high", "extra-high", "extra_high", "max", "ultra", "xxhigh", "xx-high":
 		s = "xhigh"
+	case "minimal", "minimum", "none":
+		s = "low"
 	}
 	switch s {
 	case "low", "medium", "high", "xhigh":
@@ -639,7 +675,12 @@ func PrepareResponsesBody(source map[string]any, cfg Config, st *State) (map[str
 	}
 	turnFP, iteration := turnState(source["input"])
 
-	model := strings.TrimSuffix(stringValue(source["model"]), "-excel")
+	model := stringValue(source["model"])
+	if strings.HasSuffix(model, "-excel") {
+		model = strings.TrimSuffix(model, "-excel")
+	} else {
+		model = strings.TrimSuffix(model, "-bps")
+	}
 	if model == "" {
 		model = cfg.UpstreamModel
 	}
@@ -647,19 +688,16 @@ func PrepareResponsesBody(source map[string]any, cfg Config, st *State) (map[str
 		model = defaultModel
 	}
 
-	contextManagement := source["context_management"]
-	if _, ok := contextManagement.([]any); !ok {
-		contextManagement = []any{map[string]any{"type": "compaction", "compact_threshold": 200000}}
-	}
-
 	body := map[string]any{
-		"model":              model,
-		"model_selection":    "explicit",
-		"stream":             source["stream"] == true,
-		"store":              false,
-		"input":              items,
-		"reasoning_effort":   reasoningEffort(source),
-		"context_management": contextManagement,
+		"model":            model,
+		"model_selection":  "explicit",
+		"stream":           source["stream"] == true,
+		"store":            false,
+		"input":            items,
+		"reasoning_effort": reasoningEffort(source),
+		// 恒定 stock Excel 插件值：客户端自带的 context_management（比如动过
+		// compact_threshold）会让请求在上游显得不标准。
+		"context_management": []any{map[string]any{"type": "compaction", "compact_threshold": 200000}},
 		"metadata": map[string]any{
 			"task_id":         uuid5("bps-proxy/" + conversation),
 			"turn_id":         uuid5("bps-proxy/" + conversation + "/turn/" + turnFP),
@@ -670,6 +708,12 @@ func PrepareResponsesBody(source map[string]any, cfg Config, st *State) (map[str
 		body["prompt_cache_key"] = key
 	}
 	return body, nil
+}
+
+// EstimateInputTokens 对齐参考实现的本地超限判定：序列化后的 input 字节数
+// // BYTES_PER_TOKEN。在 rewrite_images 之后、发上游之前调用。
+func EstimateInputTokens(input any) int {
+	return len(dumps(input)) / BytesPerToken
 }
 
 // ------------------------------------------------------- response transform

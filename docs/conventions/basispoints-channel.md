@@ -20,7 +20,19 @@
 `input` / `reasoning_effort` / `context_management` / `prompt_cache_key` /
 `metadata{task_id,turn_id,agent_iteration}`。
 
-- 客户端 `model` 剥 `-excel` 后缀后**原样透传**（空才兜底 defaultModel）；
+非标准暴露面收敛（整条链路不得带任何非 stock 痕迹）：
+
+- `context_management` 恒定 `[{"type":"compaction","compact_threshold":200000}]`，
+  客户端自带值一律不透传。
+- developer 消息（string 或 part 级）命中 token_budget 正则
+  `</?context_window(_guidance)?>|tokens left in this context window` 即剥除；
+  剥空则整条 item 丢弃。
+- 估算 input tokens = 序列化 input 字节数 // 3，超 `MaxInputTokens`
+  （默认 300000，extra `openai_basispoints_max_input_tokens`）本地 400
+  `input_too_large` 拒绝，不打上游。
+- effort 别名：`x-high/extra-high/extra_high/max/ultra/xxhigh/xx-high`→xhigh；
+  `minimal/minimum/none`→low；其他非法→medium。
+- 客户端 `model` 剥 `-excel`（或 `-bps`）后缀后**原样透传**（空才兜底 defaultModel）；
   `model_mapping`/`openai_basispoints_model` 只作兜底，不改写客户端模型。
 - `tools`/`tool_choice`/`instructions` 不下发。工具编进 JSON catalog
   developer 消息（文案逐字对齐 `catalog_message`，含 additional_tools 来源、
@@ -79,4 +91,5 @@
 
 `openai_basispoints`(bool 开关) / `openai_basispoints_model` /
 `openai_basispoints_url` / `openai_basispoints_timezone` /
-`openai_basispoints_tools_version_id` / `openai_basispoints_timeout_seconds`。
+`openai_basispoints_tools_version_id` / `openai_basispoints_timeout_seconds` /
+`openai_basispoints_max_input_tokens`。

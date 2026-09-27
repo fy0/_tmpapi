@@ -37,6 +37,7 @@ const (
 	extraKeyOpenAIBasisPointsTimezone     = "openai_basispoints_timezone"
 	extraKeyOpenAIBasisPointsToolsVerID   = "openai_basispoints_tools_version_id"
 	extraKeyOpenAIBasisPointsTimeoutSecs  = "openai_basispoints_timeout_seconds"
+	extraKeyOpenAIBasisPointsMaxInputTok  = "openai_basispoints_max_input_tokens"
 	openAIBasisPointsUpstreamEndpoint     = "/basispoints/api/responses"
 	openAIBasisPointsResponseReadLimitPad = 1 << 10
 	openAIBasisPointsKeepaliveInterval    = 20 * time.Second
@@ -75,6 +76,9 @@ func (a *Account) resolveOpenAIBasisPointsConfig(requestedModel string) basispoi
 	cfg.ToolsVersionID = strings.TrimSpace(a.GetExtraString(extraKeyOpenAIBasisPointsToolsVerID))
 	if secs := openAIBasisPointsExtraInt64(a, extraKeyOpenAIBasisPointsTimeoutSecs); secs > 0 {
 		cfg.TimeoutSeconds = int(secs)
+	}
+	if toks := openAIBasisPointsExtraInt64(a, extraKeyOpenAIBasisPointsMaxInputTok); toks > 0 {
+		cfg.MaxInputTokens = int(toks)
 	}
 	return cfg
 }
@@ -308,6 +312,20 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 		return s.uploadBasisPointsAttachment(uploadCtx, account, proxyURL, cfg, token, accountID, st, mediaType, data)
 	}
 	upstreamBody["input"] = basispoints.RewriteImages(upstreamBody["input"], uploader, imgStats)
+
+	// 本地超限拒绝（对齐参考实现：rewrite_images 之后、发上游之前以
+	// bytes/3 估算 input token）。BPS 上游的隐性窗口约 272k，超巨请求
+	// 发过去只会拿 422/截断，还白烧一次上游配额——本地 400 更省。
+	estTokens := basispoints.EstimateInputTokens(upstreamBody["input"])
+	if estTokens > cfg.MaxInputTokens {
+		msg := fmt.Sprintf("estimated input tokens %d exceed limit %d", estTokens, cfg.MaxInputTokens)
+		errBody, _ := json.Marshal(map[string]any{
+			"error": map[string]any{"type": "input_too_large", "code": "input_too_large", "message": msg},
+		})
+		MarkResponseCommitted(c)
+		writeOpenAIUpstreamClientError(c, http.StatusBadRequest, errBody, msg)
+		return nil, fmt.Errorf("basispoints %s", msg)
+	}
 
 	payload, err := marshalOpenAIUpstreamJSON(upstreamBody)
 	if err != nil {

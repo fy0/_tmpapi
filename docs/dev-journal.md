@@ -24,3 +24,9 @@
   加 `TestCreateShadow_BpsDimension`（extra/mapping 继承/一母一影/维度隔离/非法维度）。
 - 约定：新增 `docs/conventions/basispoints-channel.md`。
 - 构建：全部走 GitHub Actions（用户明确要求不本地编译），CI 未绿前继续修。
+- 跟进参考实现"非标准暴露面"更新：context_management 恒定 stock 值
+  （不透传客户端的）；developer 消息剥除 token_budget 泄露片段
+  （context_window 标签/"tokens left"句式，整条或 part 级命中即丢）；
+  input 序列化 bytes/3 超 300k（`openai_basispoints_max_input_tokens` 可调）
+  本地 400 input_too_large 不打上游；effort 别名扩 max/ultra/xxhigh→xhigh、
+  minimal/minimum/none→low；model 额外剥 `-bps` 后缀。

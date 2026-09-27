@@ -262,6 +262,47 @@ func TestForward_BasisPoints_UpstreamError(t *testing.T) {
 	require.Contains(t, s.rec.Body.String(), "Invalid request body")
 }
 
+// TestForward_BasisPoints_ExposureHardening 覆盖参考实现新增的「非标准暴露
+// 面」收敛：客户端自带的 context_management 不透传（恒定 stock 200000）、
+// codex 泄露的 token_budget developer 片段被剥除、-bps 模型后缀剥除。
+func TestForward_BasisPoints_ExposureHardening(t *testing.T) {
+	s := newBasisPointsSetup(t, nil)
+	inner := `{"id":"resp_h","model":"gpt-6-astra","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	s.upstream.resp = bpsUpstreamSSEResponse(inner)
+	body := []byte(`{"model":"gpt-6-astra-bps","stream":false,"input":[` +
+		`{"type":"message","role":"developer","content":[{"type":"input_text","text":"<context_window>You have 250000 tokens left in this context window</context_window>"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}` +
+		`],"context_management":[{"type":"compaction","compact_threshold":1}]}`)
+
+	_, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+	require.NoError(t, err)
+
+	up := gjson.ParseBytes(s.upstream.lastBody)
+	require.Equal(t, "gpt-6-astra", up.Get("model").String(), "-bps suffix must be stripped")
+	require.Equal(t, int64(200000), up.Get("context_management.0.compact_threshold").Int(),
+		"client-supplied context_management must be pinned to the stock value")
+	for _, item := range up.Get("input").Array() {
+		require.NotContains(t, item.Get("content.0.text").String(), "context_window",
+			"token_budget developer fragment must be stripped")
+	}
+}
+
+// TestForward_BasisPoints_InputTooLarge 覆盖本地超限拒绝：估算 input token
+// 超阈值时回 400 input_too_large，且不打上游。
+func TestForward_BasisPoints_InputTooLarge(t *testing.T) {
+	s := newBasisPointsSetup(t, map[string]any{
+		"openai_basispoints_max_input_tokens": 10,
+	})
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` +
+		strings.Repeat("x", 4096) + `"}]}]}`)
+
+	_, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, s.rec.Code)
+	require.Contains(t, s.rec.Body.String(), "input_too_large")
+	require.Nil(t, s.upstream.lastReq, "oversized input must be rejected locally without hitting upstream")
+}
+
 // TestForward_BasisPoints_DisabledKeepsCodex verifies the flag gate: without
 // extra.openai_basispoints the same account forwards to chatgpt.com.
 func TestForward_BasisPoints_DisabledKeepsCodex(t *testing.T) {
