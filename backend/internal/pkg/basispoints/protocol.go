@@ -335,10 +335,10 @@ func itemText(value any) string {
 		for _, part := range v {
 			switch p := part.(type) {
 			case string:
-				b.WriteString(p)
+				_, _ = b.WriteString(p)
 			case map[string]any:
 				if t, ok := p["text"].(string); ok {
-					b.WriteString(t)
+					_, _ = b.WriteString(t)
 				}
 			}
 		}
@@ -639,10 +639,7 @@ func PrepareResponsesBody(source map[string]any, cfg Config, st *State) (map[str
 	}
 	turnFP, iteration := turnState(source["input"])
 
-	model := stringValue(source["model"])
-	if strings.HasSuffix(model, "-excel") {
-		model = strings.TrimSuffix(model, "-excel")
-	}
+	model := strings.TrimSuffix(stringValue(source["model"]), "-excel")
 	if model == "" {
 		model = cfg.UpstreamModel
 	}
@@ -712,9 +709,7 @@ func decodeTransportCode(value any) map[string]any {
 			text = text[nl+1:]
 		}
 		text = strings.TrimSpace(text)
-		if strings.HasSuffix(text, "```") {
-			text = text[:len(text)-3]
-		}
+		text = strings.TrimSuffix(text, "```")
 	}
 	if obj, ok := parseJSONObject(text); ok {
 		return obj
@@ -1004,20 +999,20 @@ func SyntheticStream(response map[string]any) []byte {
 	created := cloneMap(response)
 	created["status"] = "in_progress"
 	created["output"] = []any{}
-	out.WriteString(sseEvent("response.created", map[string]any{"type": "response.created", "response": created}))
-	out.WriteString(sseEvent("response.in_progress", map[string]any{"type": "response.in_progress", "response": created}))
+	_, _ = out.WriteString(sseEvent("response.created", map[string]any{"type": "response.created", "response": created}))
+	_, _ = out.WriteString(sseEvent("response.in_progress", map[string]any{"type": "response.in_progress", "response": created}))
 	if output, ok := response["output"].([]any); ok {
 		for index, item := range output {
 			im, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
-			out.WriteString(sseEvent("response.output_item.added", map[string]any{
+			_, _ = out.WriteString(sseEvent("response.output_item.added", map[string]any{
 				"type": "response.output_item.added", "output_index": index, "item": im,
 			}))
 			if t := stringValue(im["type"]); t == "function_call" || t == "custom_tool_call" {
 				if args := stringValue(im["arguments"]); args != "" {
-					out.WriteString(sseEvent("response.function_call_arguments.done", map[string]any{
+					_, _ = out.WriteString(sseEvent("response.function_call_arguments.done", map[string]any{
 						"type":         "response.function_call_arguments.done",
 						"output_index": index,
 						"item_id":      stringValue(im["id"]),
@@ -1025,14 +1020,14 @@ func SyntheticStream(response map[string]any) []byte {
 					}))
 				}
 			}
-			out.WriteString(sseEvent("response.output_item.done", map[string]any{
+			_, _ = out.WriteString(sseEvent("response.output_item.done", map[string]any{
 				"type": "response.output_item.done", "output_index": index, "item": im,
 			}))
 		}
 	}
 	completed := cloneMap(response)
 	completed["status"] = "completed"
-	out.WriteString(sseEvent("response.completed", map[string]any{"type": "response.completed", "response": completed}))
-	out.WriteString("data: [DONE]\n\n")
+	_, _ = out.WriteString(sseEvent("response.completed", map[string]any{"type": "response.completed", "response": completed}))
+	_, _ = out.WriteString("data: [DONE]\n\n")
 	return []byte(out.String())
 }
