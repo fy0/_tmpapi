@@ -4,9 +4,10 @@
 // conversion of the upstream SSE stream back into a standard Responses
 // response.
 //
-// Ported from the cpa-plugin-oai-basispoints reference implementation; see
-// the account extra keys openai_basispoints* for how it is wired into the
-// OpenAI gateway forward path.
+// This is a port of the verified bps_proxy.py reference implementation (the
+// standalone ChatGPT Basispoints -> Responses API reverse proxy); see the
+// account extra keys openai_basispoints* for how it is wired into the OpenAI
+// gateway forward path.
 package basispoints
 
 import (
@@ -25,10 +26,6 @@ const (
 	DefaultUpstreamModel = "gpt-6-astra"
 	DefaultAuthMode      = "chatgpt"
 )
-
-var supportedReasoningEfforts = map[string]struct{}{
-	"low": {}, "medium": {}, "high": {}, "xhigh": {},
-}
 
 // Config carries the per-account knobs for the Basispoints channel.
 type Config struct {
@@ -132,6 +129,8 @@ func AuthHeaders(accessToken, accountID string, stream bool, cfg Config) http.He
 	h.Set("X-Stainless-Package-Version", "6.31.0")
 	h.Set("X-Stainless-Retry-Count", "0")
 	h.Set("X-Stainless-Runtime", "browser:chrome")
+	// 参考实现的 user-agent（实测可过；上游不校验浏览器身份）。
+	h.Set("User-Agent", "bps-proxy/0.1")
 	if cfg.Timezone != "" {
 		h.Set("X-Oai-Timezone", cfg.Timezone)
 	}
@@ -177,27 +176,4 @@ func firstString(object map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func jsonBytes(value any) []byte {
-	data, _ := json.Marshal(value)
-	return data
-}
-
-func stringValue(value any) string {
-	s, _ := value.(string)
-	return strings.TrimSpace(s)
-}
-
-func normalizeEffort(value any) string {
-	s, _ := value.(string)
-	s = strings.ToLower(strings.TrimSpace(s))
-	switch s {
-	case "x-high", "extra-high", "extra_high":
-		s = "xhigh"
-	}
-	if _, ok := supportedReasoningEfforts[s]; ok {
-		return s
-	}
-	return "medium"
 }

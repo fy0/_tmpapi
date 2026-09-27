@@ -531,6 +531,9 @@ type OpenAIGatewayService struct {
 	// 只由「未注入请求」铸出的 blob 更新，详见 observeOpenAITurnStateMint。
 	openaiTurnStateSessions      sync.Map
 	openaiTurnStateSessionWrites atomic.Uint64
+	// basispointsStates: 凭据账号 ID -> *basispoints.State（native call 回放 +
+	// 附件 digest 缓存，影子与母共享同一键空间）。
+	basispointsStates sync.Map
 	// openaiTurnStateTraffic: 账号+模型 -> 最近一次真实请求时刻，turn-state 猎手的空闲门槛依据。
 	openaiTurnStateTraffic sync.Map
 	// openaiTurnStateMinted: 账号+模型 -> 上游给它自然铸过 turn-state（进程内）。猎手自动定模型只认这些。

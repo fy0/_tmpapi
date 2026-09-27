@@ -419,11 +419,14 @@ type CreateAccountInput struct {
 
 // ShadowOptions is the input for CreateShadow.
 // The shadow holds no credentials — the scheduler transparently delegates to the parent account's tokens.
+// Dimension selects the shadow kind: "" / "spark"（默认，bengalfox 配额道）或
+// "bps"（Basispoints 渠道副本，写 openai_basispoints extra 走 bps.openai.com）。
 type ShadowOptions struct {
 	Name        string
 	Priority    int
 	Concurrency int
 	GroupIDs    []int64
+	Dimension   string
 }
 
 type UpdateAccountInput struct {

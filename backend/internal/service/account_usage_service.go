@@ -729,13 +729,21 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	if force || shouldRefreshOpenAICodexSnapshot(account, usage, now) {
 		if account.IsShadow() {
-			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
-			// via the shared OpenAIQuotaService, which resolves credentials from the
-			// parent account.  The result is written to the shadow row's own codex_*
+			// Shadow accounts fetch usage from /wham/usage via the shared
+			// OpenAIQuotaService, which resolves credentials from the parent
+			// account.  The result is written to the shadow row's own codex_*
 			// Extra keys and immediately reflected in the returned UsageInfo.
+			// 窗口按维度选择：spark 影子看 bengalfox 道；bps 渠道副本消耗普通
+			// ChatGPT plan 配额，看 primary 窗口。
 			if s.openAIQuotaService != nil {
 				if quotaUsage, err := s.openAIQuotaService.QueryUsageOnly(ctx, account.ID, force); err == nil {
-					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, time.Unix(quotaUsage.FetchedAt, 0)); len(updates) > 0 {
+					var updates map[string]any
+					if account.QuotaDimensionOrDefault() == QuotaDimensionSpark {
+						updates = buildCodexSparkWindowExtraUpdates(quotaUsage, time.Unix(quotaUsage.FetchedAt, 0))
+					} else {
+						updates = buildCodexPrimaryWindowExtraUpdates(quotaUsage, time.Unix(quotaUsage.FetchedAt, 0))
+					}
+					if len(updates) > 0 {
 						mergeAccountExtra(account, updates)
 						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
 						if account.ParentAccountID != nil {

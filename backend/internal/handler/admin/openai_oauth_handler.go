@@ -549,14 +549,16 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 }
 
 // CreateShadowRequest is the request body for CreateShadow.
+// dimension 缺省 "spark"；"bps" 创建 Basispoints 渠道副本。
 type CreateShadowRequest struct {
 	Name        string  `json:"name"`
 	Priority    int     `json:"priority"`
 	Concurrency int     `json:"concurrency"`
 	GroupIDs    []int64 `json:"group_ids"`
+	Dimension   string  `json:"dimension"`
 }
 
-// CreateShadow creates a spark-dimension shadow account for a parent OpenAI OAuth account.
+// CreateShadow creates a shadow account (spark or bps dimension) for a parent OpenAI OAuth account.
 // POST /api/v1/admin/accounts/:id/shadow
 func (h *OpenAIOAuthHandler) CreateShadow(c *gin.Context) {
 	parentID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -576,6 +578,7 @@ func (h *OpenAIOAuthHandler) CreateShadow(c *gin.Context) {
 		Priority:    req.Priority,
 		Concurrency: req.Concurrency,
 		GroupIDs:    req.GroupIDs,
+		Dimension:   req.Dimension,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

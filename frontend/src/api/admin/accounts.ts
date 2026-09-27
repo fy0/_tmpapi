@@ -1016,11 +1016,18 @@ export interface SparkShadowCreatePayload {
   priority?: number
   concurrency?: number
   group_ids?: number[]
+  // 影子维度：缺省 "spark"；"bps" 创建 Basispoints 渠道副本（共享母账号凭据，
+  // /v1/responses 改送 bps.openai.com，extra.openai_basispoints=true）。
+  dimension?: string
 }
 
 export async function createSparkShadow(parentId: number, payload: SparkShadowCreatePayload): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${parentId}/shadow`, payload)
   return data
+}
+
+export async function createBpsShadow(parentId: number, payload: Omit<SparkShadowCreatePayload, 'dimension'>): Promise<Account> {
+  return createSparkShadow(parentId, { ...payload, dimension: 'bps' })
 }
 
 export async function getUpstreamBillingProbeSettings(): Promise<UpstreamBillingProbeSettings> {
@@ -1183,6 +1190,7 @@ export const accountsAPI = {
   refreshOpenAIQuota,
   resetOpenAIQuota,
   createSparkShadow,
+  createBpsShadow,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,
   setUpstreamBillingProbeEnabled,

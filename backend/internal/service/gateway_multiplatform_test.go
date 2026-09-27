@@ -237,6 +237,10 @@ func (m *mockAccountRepoForPlatform) ListShadowsByParent(ctx context.Context, pa
 	return nil, nil
 }
 
+func (m *mockAccountRepoForPlatform) ListShadowsByParentDimension(ctx context.Context, parentID int64, dimension string) ([]*Account, error) {
+	return nil, nil
+}
+
 // Verify interface implementation
 var _ AccountRepository = (*mockAccountRepoForPlatform)(nil)
 

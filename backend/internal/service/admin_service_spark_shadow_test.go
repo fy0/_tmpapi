@@ -56,7 +56,18 @@ func (s *sparkShadowRepoStub) GetByID(_ context.Context, id int64) (*Account, er
 func (s *sparkShadowRepoStub) ListShadowsByParent(_ context.Context, parentID int64) ([]*Account, error) {
 	var result []*Account
 	for _, acc := range s.accounts {
-		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID && acc.QuotaDimension == QuotaDimensionSpark {
+		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID {
+			cp := *acc
+			result = append(result, &cp)
+		}
+	}
+	return result, nil
+}
+
+func (s *sparkShadowRepoStub) ListShadowsByParentDimension(_ context.Context, parentID int64, dimension string) ([]*Account, error) {
+	var result []*Account
+	for _, acc := range s.accounts {
+		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID && acc.QuotaDimension == dimension {
 			cp := *acc
 			result = append(result, &cp)
 		}
@@ -1030,4 +1041,56 @@ func TestForceOpenAIPrivacy_SkipsShadow(t *testing.T) {
 	pid := int64(1)
 	shadow := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &pid}
 	require.Equal(t, "", svc.ForceOpenAIPrivacy(context.Background(), shadow), "影子隐私设置应跳过")
+}
+
+// TestCreateShadow_BpsDimension 验证 bps 渠道副本:quota_dimension='bps'、
+// extra.openai_basispoints=true 钉住上游模型、凭据继承母账号 model_mapping
+// 且绝不含 auth token、与 spark 影子按维度隔离可并存。
+func TestCreateShadow_BpsDimension(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	parent := &Account{
+		Name:     "p",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"refresh_token":      "RT",
+			"chatgpt_account_id": "org-x",
+			"model_mapping":      map[string]any{"gpt-5.3-codex": "gpt-5.3-codex"},
+		},
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+
+	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Dimension: QuotaDimensionBps})
+	require.NoError(t, err)
+	require.Equal(t, parent.ID, *shadow.ParentAccountID)
+	require.Equal(t, QuotaDimensionBps, shadow.QuotaDimension)
+	require.Equal(t, "p (BPS)", shadow.Name)
+	require.Equal(t, true, shadow.Extra[extraKeyOpenAIBasisPoints])
+	require.Equal(t, "gpt-6-astra", shadow.Extra[extraKeyOpenAIBasisPointsModel])
+	require.Nil(t, shadow.Credentials["refresh_token"], "bps 副本不得持有 auth token")
+	require.Nil(t, shadow.Credentials["access_token"], "bps 副本不得持有 auth token")
+	mapping, ok := shadow.Credentials["model_mapping"].(map[string]any)
+	require.True(t, ok, "bps 副本须继承母账号 model_mapping")
+	require.Equal(t, "gpt-5.3-codex", mapping["gpt-5.3-codex"])
+	require.True(t, shadow.IsOpenAIBasisPointsEnabled(), "bps 副本须命中网关 BPS 路由")
+
+	// 一母一 bps 影：重复创建按 409 拒绝。
+	_, err = svc.CreateShadow(ctx, parent.ID, ShadowOptions{Dimension: QuotaDimensionBps})
+	require.Error(t, err)
+	require.Equal(t, http.StatusConflict, infraerrors.Code(err))
+
+	// 维度隔离：同一母账号仍可再建 spark 影子（两者并存）。
+	spark, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "p-spark"})
+	require.NoError(t, err)
+	require.Equal(t, QuotaDimensionSpark, spark.QuotaDimension)
+	require.False(t, spark.IsOpenAIBasisPointsEnabled())
+
+	// 非法维度被结构化拒绝。
+	_, err = svc.CreateShadow(ctx, parent.ID, ShadowOptions{Dimension: "bogus"})
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
 }

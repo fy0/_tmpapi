@@ -121,9 +121,11 @@ type AccountRepository interface {
 	// RevertProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
 	// 仅当 proxy_fallback_origin_id IS NOT NULL 时更新，否则视为账号不存在（返回 ErrAccountNotFound）。
 	RevertProxyFallback(ctx context.Context, accountID int64) error
-	// ListShadowsByParent 返回指定父账号的影子账号；当前实现仅查 quota_dimension='spark'（唯一预设）。
-	// ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
+	// ListShadowsByParent 返回指定父账号的全部影子账号（不限 quota_dimension）。
+	// 级联删除/type 守卫/proxy 传播需要全量；「一母一影」校验用 Dimension 版本。
 	ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error)
+	// ListShadowsByParentDimension 返回指定父账号在特定 quota_dimension 下的影子账号。
+	ListShadowsByParentDimension(ctx context.Context, parentID int64, dimension string) ([]*Account, error)
 }
 
 type AccountDuplicateRepository interface {

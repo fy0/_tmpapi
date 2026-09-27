@@ -174,6 +174,10 @@ func (m *sessionWindowMockRepo) ListShadowsByParent(context.Context, int64) ([]*
 	panic("unexpected")
 }
 
+func (m *sessionWindowMockRepo) ListShadowsByParentDimension(context.Context, int64, string) ([]*Account, error) {
+	panic("unexpected")
+}
+
 // newRateLimitServiceForTest creates a RateLimitService with the given mock repo.
 func newRateLimitServiceForTest(repo AccountRepository) *RateLimitService {
 	return &RateLimitService{accountRepo: repo}

@@ -1970,6 +1970,10 @@ func (s *stubAccountRepo) ListShadowsByParent(ctx context.Context, parentID int6
 	return nil, errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ListShadowsByParentDimension(ctx context.Context, parentID int64, dimension string) ([]*service.Account, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *stubAccountRepo) ListSchedulable(ctx context.Context) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }

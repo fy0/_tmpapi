@@ -198,9 +198,9 @@ func (Account) Fields() []ent.Field {
 			MaxLen(20),
 
 		field.Int64("parent_account_id").Optional().Nillable().
-			Comment("Parent account id for a linked spark shadow (NULL = normal)."),
-		field.Enum("quota_dimension").Values("global", "spark").Default("global").
-			Comment("'global' (default) or 'spark' (shadow reads codex_bengalfox)."),
+			Comment("Parent account id for a linked shadow (NULL = normal)."),
+		field.Enum("quota_dimension").Values("global", "spark", "bps").Default("global").
+			Comment("'global' (default), 'spark' (shadow reads codex_bengalfox), or 'bps' (basispoints channel copy)."),
 	}
 }
 
