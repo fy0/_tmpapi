@@ -13,8 +13,8 @@ type ImageUploadFunc func(mediaType string, data []byte) (string, error)
 // DecodeImageDataURL splits a data: URL into (media_type, bytes); returns nil
 // for anything that is not a base64 data URL.
 func DecodeImageDataURL(url string) (string, []byte) {
-	header, sep, payload := strings.Cut(url, ",")
-	if !sep || !strings.Contains(header, ";base64") {
+	header, payload, found := strings.Cut(url, ",")
+	if !found || !strings.Contains(header, ";base64") {
 		return "", nil
 	}
 	mediaType := strings.TrimPrefix(header, "data:")
