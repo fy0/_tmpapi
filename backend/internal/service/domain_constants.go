@@ -754,10 +754,14 @@ func SettingKeyAuthSourcePlatformQuotas(source string) string {
 	return fmt.Sprintf("auth_source_default_%s_platform_quotas", source)
 }
 
-// QuotaDimension constants for spark shadow accounts.
+// QuotaDimension constants for shadow accounts.
+//   - spark：影子读母账号凭据、用量看 bengalfox 窗口（gpt-*.3-codex-spark 专用道）。
+//   - bps：Basispoints 渠道副本——同样透传母账号凭据，但走 bps.openai.com
+//     Excel 画像上游；消耗的是普通 ChatGPT plan 配额，用量看 primary 窗口。
 const (
 	QuotaDimensionGlobal = "global"
 	QuotaDimensionSpark  = "spark"
+	QuotaDimensionBps    = "bps"
 )
 
 // AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).

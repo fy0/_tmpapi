@@ -18,6 +18,10 @@ func (r *upstreamBillingProbeAdminRepo) ListShadowsByParent(context.Context, int
 	return nil, nil
 }
 
+func (r *upstreamBillingProbeAdminRepo) ListShadowsByParentDimension(context.Context, int64, string) ([]*Account, error) {
+	return nil, nil
+}
+
 type accountBillingSettingsAdminRepo struct {
 	*upstreamBillingProbeAccountRepo
 	concurrentRate   *float64

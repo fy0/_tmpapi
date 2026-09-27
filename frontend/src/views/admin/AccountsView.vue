@@ -469,7 +469,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @create-bps-shadow="handleCreateBpsShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -486,6 +486,7 @@
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
+    <ConfirmDialog :show="showCreateBpsShadowDialog" :title="t('admin.accounts.createBpsShadow')" :message="t('admin.accounts.createBpsShadowConfirm', { name: creatingBpsShadowAcc?.name })" @confirm="confirmCreateBpsShadow" @cancel="showCreateBpsShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
       <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
         <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" v-model="includeProxyOnExport" />
@@ -613,6 +614,8 @@ const bulkEditTarget = ref<AccountBulkEditTarget | null>(null)
 const showTempUnsched = ref(false)
 const showDeleteDialog = ref(false)
 const showCreateShadowDialog = ref(false)
+const showCreateBpsShadowDialog = ref(false)
+const creatingBpsShadowAcc = ref<Account | null>(null)
 const showReAuth = ref(false)
 const showTest = ref(false)
 const showStats = ref(false)
@@ -2471,6 +2474,24 @@ const confirmCreateSparkShadow = async () => {
   } catch (error: any) {
     console.error('Failed to create spark shadow:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.createSparkShadowFailed'))
+  }
+}
+const handleCreateBpsShadow = (a: Account) => {
+  creatingBpsShadowAcc.value = a
+  showCreateBpsShadowDialog.value = true
+}
+const confirmCreateBpsShadow = async () => {
+  const a = creatingBpsShadowAcc.value
+  if (!a) return
+  try {
+    await adminAPI.accounts.createBpsShadow(a.id, { name: `${a.name} (BPS)` })
+    showCreateBpsShadowDialog.value = false
+    creatingBpsShadowAcc.value = null
+    appStore.showSuccess(t('admin.accounts.createBpsShadowSuccess'))
+    reload()
+  } catch (error: any) {
+    console.error('Failed to create bps shadow:', error)
+    appStore.showError(error?.response?.data?.message || t('admin.accounts.createBpsShadowFailed'))
   }
 }
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }

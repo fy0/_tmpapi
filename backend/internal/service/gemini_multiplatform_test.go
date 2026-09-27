@@ -201,6 +201,10 @@ func (m *mockAccountRepoForGemini) ListShadowsByParent(ctx context.Context, pare
 	return nil, nil
 }
 
+func (m *mockAccountRepoForGemini) ListShadowsByParentDimension(ctx context.Context, parentID int64, dimension string) ([]*Account, error) {
+	return nil, nil
+}
+
 // Verify interface implementation
 var _ AccountRepository = (*mockAccountRepoForGemini)(nil)
 

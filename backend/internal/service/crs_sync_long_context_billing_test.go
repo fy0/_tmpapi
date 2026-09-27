@@ -62,6 +62,10 @@ func (r *crsLongContextAccountRepo) ListShadowsByParent(_ context.Context, _ int
 	return nil, nil
 }
 
+func (r *crsLongContextAccountRepo) ListShadowsByParentDimension(_ context.Context, _ int64, _ string) ([]*Account, error) {
+	return nil, nil
+}
+
 func TestCRSSyncOpenAILongContextBilling(t *testing.T) {
 	tests := []struct {
 		name          string

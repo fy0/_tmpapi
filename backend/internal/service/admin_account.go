@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/basispoints"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -1422,9 +1423,30 @@ func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id in
 	return s.propagateProxyToShadows(ctx, id, account.ProxyID)
 }
 
-// CreateShadow 为指定 OpenAI OAuth 母账号创建 spark 维度影子账号（一母一影）。
-// 安全不变量：Credentials 恒不含 auth token（仅 model_mapping，守卫 isAllowedSparkShadowCredentialsUpdate 放行）。
+// shadowDimensionLabel 给错误消息用的维度可读名。
+func shadowDimensionLabel(dimension string) string {
+	if dimension == QuotaDimensionBps {
+		return "bps"
+	}
+	return "spark"
+}
+
+// CreateShadow 为指定 OpenAI OAuth 母账号创建影子账号（每个维度一母一影）。
+// opts.Dimension 缺省 "spark"；"bps" 创建 Basispoints 渠道副本——同样透传母账号
+// 凭据，但 /v1/responses 流量改走 bps.openai.com（extra.openai_basispoints）。
+// 安全不变量：Credentials 恒不含 auth token（仅 model_mapping，守卫
+// isAllowedSparkShadowCredentialsUpdate 放行）。
 func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opts ShadowOptions) (*Account, error) {
+	dimension := strings.TrimSpace(opts.Dimension)
+	if dimension == "" {
+		dimension = QuotaDimensionSpark
+	}
+	if dimension != QuotaDimensionSpark && dimension != QuotaDimensionBps {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "SHADOW_INVALID_DIMENSION",
+			"unsupported shadow dimension %q (want spark or bps)", dimension)
+	}
+	label := shadowDimensionLabel(dimension)
+
 	// 1. 加载母账号并校验平台/类型
 	parent, err := s.accountRepo.GetByID(ctx, parentID)
 	if err != nil {
@@ -1432,27 +1454,27 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	}
 	if !parent.IsOpenAIOAuth() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",
-			"spark shadow requires an OpenAI OAuth parent account")
+			label+" shadow requires an OpenAI OAuth parent account")
 	}
 	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
 	// 会解析到无凭据的一级影子,进入坏调度/上游失败。
 	if parent.IsCredentialShadow() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_IS_SHADOW",
-			"spark shadow parent must be a real account, not another spark shadow")
+			label+" shadow parent must be a real account, not another shadow")
 	}
 
-	// 2. 一母一影校验
-	shadows, err := s.accountRepo.ListShadowsByParent(ctx, parentID)
+	// 2. 一母一影校验（按维度隔离：spark 与 bps 影子可并存）。
+	shadows, err := s.accountRepo.ListShadowsByParentDimension(ctx, parentID, dimension)
 	if err != nil {
-		return nil, fmt.Errorf("check existing spark shadows: %w", err)
+		return nil, fmt.Errorf("check existing %s shadows: %w", label, err)
 	}
 	if len(shadows) > 0 {
 		return nil, infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ALREADY_EXISTS",
-			"parent account already has a spark shadow account")
+			"parent account already has a "+label+" shadow account")
 	}
 
 	// 3. 解析分组。未指定 GroupIDs 时:优先**继承母账号当前分组**(影子与母同路由域,母在自定义
-	// 组时该组的 spark 请求也能选到影子;G1 决策);母无分组再回落 openai-default(F4)。
+	// 组时该组的请求也能选到影子;G1 决策);母无分组再回落 openai-default(F4)。
 	// 显式指定 GroupIDs 时,与 UpdateAccount 对齐先校验存在性(创建前),避免建出影子后再因无效组
 	// 失败而留下孤儿影子(一母一影唯一索引会挡住重试)——外审 C/P1。
 	groupIDs := opts.GroupIDs
@@ -1480,11 +1502,15 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	}
 
 	// 4. 构造影子账号（安全不变量：Credentials 恒不含 auth token，仅含 model_mapping）。
-	// name 为空时默认 "<母账号名> (Spark)"——否则空 name 会在 ent(name NotEmpty)处变成裸 500
+	// name 为空时默认 "<母账号名> (Spark|BPS)"——否则空 name 会在 ent(name NotEmpty)处变成裸 500
 	// (外审 E/P2);并 rune 安全截断到 ent MaxLen(100)。
+	defaultSuffix := " (Spark)"
+	if dimension == QuotaDimensionBps {
+		defaultSuffix = " (BPS)"
+	}
 	name := strings.TrimSpace(opts.Name)
 	if name == "" {
-		name = parent.Name + " (Spark)"
+		name = parent.Name + defaultSuffix
 	}
 	if runes := []rune(name); len(runes) > 100 {
 		name = string(runes[:100])
@@ -1502,31 +1528,52 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	if priority <= 0 {
 		priority = parent.Priority
 	}
+	// credentials.model_mapping：spark 影子用恒等映射（只接 spark 模型白名单）；
+	// bps 副本继承母账号映射（与母账号准入同一组模型——副本是"同入口换上游"，
+	// 上游模型由 extra.openai_basispoints_model 钉死而非 mapping 改写）。
+	var credentials map[string]any
+	if dimension == QuotaDimensionBps {
+		credentials = map[string]any{}
+		if mapping := parent.GetModelMapping(); len(mapping) > 0 {
+			raw := make(map[string]any, len(mapping))
+			for k, v := range mapping {
+				raw[k] = v
+			}
+			credentials["model_mapping"] = raw
+		}
+	} else {
+		credentials = map[string]any{"model_mapping": defaultSparkShadowModelMapping()}
+	}
+	extra := map[string]any{
+		openAILongContextBillingEnabledKey: parent.IsOpenAILongContextBillingEnabled(),
+	}
+	if dimension == QuotaDimensionBps {
+		extra[extraKeyOpenAIBasisPoints] = true
+		extra[extraKeyOpenAIBasisPointsModel] = basispoints.DefaultConfig().UpstreamModel
+	}
 	shadow := &Account{
 		Name:            name,
 		Platform:        PlatformOpenAI,
 		Type:            AccountTypeOAuth,
 		Status:          StatusActive,
-		Credentials:     map[string]any{"model_mapping": defaultSparkShadowModelMapping()},
+		Credentials:     credentials,
 		ParentAccountID: &parentID,
-		QuotaDimension:  QuotaDimensionSpark,
+		QuotaDimension:  dimension,
 		ProxyID:         parent.ProxyID,
 		Priority:        priority,
 		Concurrency:     concurrency,
 		Schedulable:     true,
-		Extra: map[string]any{
-			openAILongContextBillingEnabledKey: parent.IsOpenAILongContextBillingEnabled(),
-		},
+		Extra:           extra,
 	}
 
 	// 5. 持久化（Create 填充 shadow.ID）。并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞
 	// 一母一影唯一索引。复查确认确为"已存在"竞态时返回结构化 409 而非裸 500——外审 A/P1。
 	if err := s.accountRepo.Create(ctx, shadow); err != nil {
-		if existing, qerr := s.accountRepo.ListShadowsByParent(ctx, parentID); qerr == nil && len(existing) > 0 {
+		if existing, qerr := s.accountRepo.ListShadowsByParentDimension(ctx, parentID, dimension); qerr == nil && len(existing) > 0 {
 			return nil, infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ALREADY_EXISTS",
-				"parent account already has a spark shadow account")
+				"parent account already has a "+label+" shadow account")
 		}
-		return nil, fmt.Errorf("create spark shadow: %w", err)
+		return nil, fmt.Errorf("create %s shadow: %w", label, err)
 	}
 
 	// 6. 绑定分组。注意:create+bind 非单一 DB 事务(通用 Create 走 r.client、outbox 走 r.sql,

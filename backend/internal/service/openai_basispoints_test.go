@@ -171,7 +171,8 @@ func TestForward_BasisPoints_NonStream(t *testing.T) {
 func TestForward_BasisPoints_ToolRelay(t *testing.T) {
 	s := newBasisPointsSetup(t, nil)
 
-	runOfficeCall := `{"type":"function_call","id":"fc_native_1","call_id":"call_abc","name":"run_officejs","arguments":"{\"summary\":\"run\",\"extended_summary\":\"relay\",\"destructive\":false,\"references\":[],\"code\":\"{\\\"tool\\\":\\\"exec_command\\\",\\\"args\\\":{\\\"cmd\\\":\\\"pwd\\\"}}\"}","status":"completed"}`
+	// envelope 内层 code 对齐参考实现形态：{"name":..., "arguments":{...}}。
+	runOfficeCall := `{"type":"function_call","id":"fc_native_1","call_id":"call_abc","name":"run_officejs","arguments":"{\"summary\":\"run\",\"extended_summary\":\"relay\",\"destructive\":false,\"references\":[],\"code\":\"{\\\"name\\\":\\\"exec_command\\\",\\\"arguments\\\":{\\\"cmd\\\":\\\"pwd\\\"}}\"}","status":"completed"}`
 	inner1 := `{"id":"resp_t1","model":"gpt-6-astra","status":"completed","output":[` + runOfficeCall + `],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}`
 	s.upstream.resp = bpsUpstreamSSEResponse(inner1)
 
@@ -236,7 +237,7 @@ func TestForward_BasisPoints_ToolRelay(t *testing.T) {
 	for _, item := range up2.Get("input").Array() {
 		if item.Get("type").String() == "function_call_output" && item.Get("call_id").String() == "call_abc" {
 			sawNormalizedOutput = true
-			require.Equal(t, "fc_call_abc", item.Get("id").String())
+			require.True(t, strings.HasPrefix(item.Get("id").String(), "fc_"), "deterministic uuid5 id: %s", item.Get("id").String())
 			require.Equal(t, "/work", item.Get("output").String())
 		}
 	}
