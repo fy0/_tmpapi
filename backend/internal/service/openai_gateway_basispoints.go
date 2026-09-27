@@ -126,7 +126,10 @@ func (s *OpenAIGatewayService) basispointsStateFor(account *Account) *basispoint
 	}
 	st := basispoints.NewState()
 	actual, _ := s.basispointsStates.LoadOrStore(key, st)
-	return actual.(*basispoints.State)
+	if typed, ok := actual.(*basispoints.State); ok {
+		return typed
+	}
+	return st
 }
 
 // resolveBasisPointsAccountID 取 ChatGPT account id：优先凭据字段，缺失时
