@@ -35,6 +35,9 @@ type Config struct {
 	MaxResponseBytes int64
 	AuthMode         string
 	ToolsVersionID   string
+	// MaxInputTokens 是本地超限拒绝阈值（估算法：input 序列化字节数/3，
+	// 对齐参考实现 BPS_MAX_INPUT_TOKENS=300000）。
+	MaxInputTokens int
 	// Timezone is sent via the x-oai-timezone header (the only channel the
 	// upstream accepts for timezone; body/metadata keys are rejected).
 	Timezone string
@@ -47,6 +50,7 @@ func DefaultConfig() Config {
 		UpstreamModel:    DefaultUpstreamModel,
 		TimeoutSeconds:   300,
 		MaxResponseBytes: 64 << 20,
+		MaxInputTokens:   DefaultMaxInputTokens,
 		AuthMode:         DefaultAuthMode,
 	}
 }
@@ -85,6 +89,12 @@ func (c *Config) Normalize() error {
 	}
 	if c.MaxResponseBytes == 0 {
 		c.MaxResponseBytes = 64 << 20
+	}
+	if c.MaxInputTokens < 0 || c.MaxInputTokens > 10_000_000 {
+		return fmt.Errorf("basispoints max_input_tokens must be between 0 and 10000000")
+	}
+	if c.MaxInputTokens == 0 {
+		c.MaxInputTokens = DefaultMaxInputTokens
 	}
 	return nil
 }
