@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -46,6 +47,9 @@ const (
 // <context_window_guidance> 标签）。真 Excel 插件从不产生这些内容；不剥除
 // 等于用非 stock 窗口尺寸给请求打指纹。
 var tokenBudgetRe = regexp.MustCompile(`</?context_window(_guidance)?>|tokens left in this context window`)
+
+// ErrInvalidToolEnvelope means a transport call cannot be safely replayed to the client.
+var ErrInvalidToolEnvelope = errors.New("invalid_tool_envelope")
 
 // dumps 对齐 Python json.dumps(ensure_ascii=False, separators=(",",":"))。
 // Go json.Marshal 对 map 键按字典序输出且 UTF-8 原样透传（仅转义 <>&），
@@ -253,8 +257,10 @@ func catalogMessage(source map[string]any) string {
 		"not put JavaScript, OfficeJS, a second run_officejs envelope, or a " +
 		"functions.run_officejs wrapper inside code. The field is named code " +
 		"for compatibility; it is not JavaScript. Serialize the complete inner " +
-		"object before placing it there, especially when shell commands " +
-		"contain backslashes or quotes. TOOL_NAME and its payload must follow " +
+		"object before placing it there. In the inner JSON text, a literal " +
+		"backslash is written as two backslashes; never emit an invalid " +
+		"escape such as backslash-dot. Quotes inside a JSON string must be " +
+		"escaped too. TOOL_NAME and its payload must follow " +
 		"the catalog exactly. The proxy converts this native function call " +
 		"into the real client tool call, then replays the original run_officejs " +
 		"identity with the client tool result on the next request. Interpret " +
@@ -292,7 +298,7 @@ func functionItemID(callID string) string {
 // transportEnvelopeCall 把客户端 function_call/custom_tool_call 历史项包装成
 // run_officejs 调用——catalog 消息教模型以 envelope 形态回放历史调用，
 // 保持一致性（对齐参考实现的 transport_envelope_call）。
-func transportEnvelopeCall(item map[string]any) map[string]any {
+func transportEnvelopeCall(item map[string]any) (map[string]any, error) {
 	name := stringValue(item["name"])
 	callID := stringValue(item["call_id"])
 	if callID == "" {
@@ -303,12 +309,21 @@ func transportEnvelopeCall(item map[string]any) map[string]any {
 	}
 	var inner map[string]any
 	if stringValue(item["type"]) == "custom_tool_call" {
-		inner = map[string]any{"name": name, "input": stringValue(item["input"])}
+		input := item["input"]
+		if input == nil {
+			input = ""
+		}
+		if _, ok := input.(string); !ok {
+			input = string(dumps(input))
+		}
+		inner = map[string]any{"name": name, "input": input}
 	} else {
 		args := map[string]any{}
 		if raw := stringValue(item["arguments"]); raw != "" {
-			if parsed, ok := parseJSONObject(raw); ok {
-				args = parsed
+			var ok bool
+			args, ok = parseJSONObject(raw)
+			if !ok {
+				return nil, fmt.Errorf("%w: arguments for client tool %q are not a JSON object", ErrInvalidToolEnvelope, name)
 			}
 		}
 		inner = map[string]any{"name": name, "arguments": args}
@@ -327,12 +342,74 @@ func transportEnvelopeCall(item map[string]any) map[string]any {
 		"name":      transportName,
 		"status":    "completed",
 		"arguments": string(dumps(outer)),
+	}, nil
+}
+
+// repairInvalidJSONEscapes doubles only backslashes that are not legal JSON escapes.
+// Unescaped quotes and broken structure are ambiguous and must still be rejected.
+func repairInvalidJSONEscapes(raw string) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(raw))
+	inString, changed := false, false
+	for i := 0; i < len(raw); i++ {
+		char := raw[i]
+		if !inString {
+			out.WriteByte(char)
+			if char == '"' {
+				inString = true
+			}
+			continue
+		}
+		if char == '"' {
+			inString = false
+			out.WriteByte(char)
+			continue
+		}
+		if char != '\\' {
+			out.WriteByte(char)
+			continue
+		}
+		if i+1 >= len(raw) {
+			return "", false
+		}
+		escaped := raw[i+1]
+		if strings.IndexByte(`"\/bfnrt`, escaped) >= 0 {
+			out.WriteByte(char)
+			out.WriteByte(escaped)
+			i++
+			continue
+		}
+		if escaped == 'u' && i+5 < len(raw) {
+			validHex := true
+			for j := i + 2; j < i+6; j++ {
+				if strings.IndexByte("0123456789abcdefABCDEF", raw[j]) < 0 {
+					validHex = false
+					break
+				}
+			}
+			if validHex {
+				out.WriteString(raw[i : i+6])
+				i += 5
+				continue
+			}
+		}
+		out.WriteString(`\\`)
+		changed = true
 	}
+	return out.String(), changed
 }
 
 func parseJSONObject(raw string) (map[string]any, bool) {
 	var obj map[string]any
-	if err := json.Unmarshal([]byte(raw), &obj); err != nil || obj == nil {
+	if err := json.Unmarshal([]byte(raw), &obj); err == nil && obj != nil {
+		return obj, true
+	}
+	repaired, changed := repairInvalidJSONEscapes(raw)
+	if !changed {
+		return nil, false
+	}
+	obj = nil
+	if err := json.Unmarshal([]byte(repaired), &obj); err != nil || obj == nil {
 		return nil, false
 	}
 	return obj, true
@@ -449,15 +526,16 @@ func translateMessageItem(item map[string]any) map[string]any {
 //   - reasoning：只保留 encrypted_content 形态，其余丢弃。
 //   - item_reference：丢弃。
 //   - message/带 role 条目：translateMessageItem。
-func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) []any {
+func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) ([]any, error) {
 	if s, ok := rawInput.(string); ok {
-		return []any{messageItem("user", s)}
+		return []any{messageItem("user", s)}, nil
 	}
 	list, ok := rawInput.([]any)
 	if !ok {
-		return []any{}
+		return []any{}, nil
 	}
 	var result []any
+	var pendingNative []map[string]any
 	origins := map[string]string{} // call_id -> transport name（本请求内转换的调用）
 	for _, value := range list {
 		item, ok := value.(map[string]any)
@@ -479,7 +557,7 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) []
 			}
 			name := stringValue(item["name"])
 			if isTransportName(name) {
-				st.StoreNativeCall(callID, item)
+				pendingNative = append(pendingNative, item)
 				if callID != "" {
 					origins[callID] = transportName
 				}
@@ -491,7 +569,11 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) []
 				if callID != "" {
 					origins[callID] = transportName
 				}
-				result = append(result, transportEnvelopeCall(item))
+				wrapped, err := transportEnvelopeCall(item)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, wrapped)
 				continue
 			}
 			result = append(result, item)
@@ -527,7 +609,10 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) []
 			result = append(result, item)
 		}
 	}
-	return result
+	for _, native := range pendingNative {
+		st.StoreNativeCall(stringValue(native["call_id"]), native)
+	}
+	return result, nil
 }
 
 // normalizeToolOutput 对齐参考实现的 fco/ctco output 归一化：
@@ -650,7 +735,10 @@ func turnState(rawInput any) (string, string) {
 // schema。st 为按凭据账号隔离的运行态（native call 回放）；可为 nil。
 func PrepareResponsesBody(source map[string]any, cfg Config, st *State) (map[string]any, error) {
 	_, byName := clientToolSpecs(source)
-	items := translateInputItems(source["input"], byName, st)
+	items, err := translateInputItems(source["input"], byName, st)
+	if err != nil {
+		return nil, err
+	}
 
 	var prologue []any
 	if instructions := stringValue(source["instructions"]); instructions != "" {
@@ -736,8 +824,8 @@ func parseArguments(value any) map[string]any {
 	return nil
 }
 
-// decodeTransportCode 解 envelope 的 code 字段：容错 ```fence 包裹与
-// 尾随垃圾（json raw_decode 前缀解析）。
+// decodeTransportCode 解 envelope 的 code 字段：容错 ```fence 包裹，
+// 但要求完整 JSON 对象，拒绝合法前缀后的尾随垃圾。
 func decodeTransportCode(value any) map[string]any {
 	if obj, ok := value.(map[string]any); ok {
 		return obj
@@ -755,40 +843,38 @@ func decodeTransportCode(value any) map[string]any {
 		text = strings.TrimSpace(text)
 		text = strings.TrimSuffix(text, "```")
 	}
-	if obj, ok := parseJSONObject(text); ok {
-		return obj
-	}
-	// raw_decode 等价：解出第一个 JSON 值即停。
-	dec := json.NewDecoder(strings.NewReader(text))
-	var obj map[string]any
-	if err := dec.Decode(&obj); err != nil || obj == nil {
-		return nil
-	}
+	obj, _ := parseJSONObject(strings.TrimSpace(text))
 	return obj
 }
 
 // extractEnvelope 剥 run_officejs 包装 → 内层 {"tool"|"name":..., "args"|"arguments"|"input":...}。
-// 至多再剥一层（模型偶尔把 run_officejs 信封再包一层）；剥完还是信封则视为无效。
-func extractEnvelope(native map[string]any) map[string]any {
+// 至多再剥一层；解析失败必须返回错误，不能让原始 transport wrapper 泄漏到客户端。
+func extractEnvelope(native map[string]any) (map[string]any, error) {
 	if stringValue(native["type"]) != "function_call" || !isTransportName(stringValue(native["name"])) {
-		return nil
+		return nil, nil
 	}
 	args := parseArguments(native["arguments"])
 	if args == nil {
-		return nil
+		return nil, fmt.Errorf("%w: transport arguments are not a JSON object", ErrInvalidToolEnvelope)
 	}
 	envelope := decodeTransportCode(args["code"])
-	if envelope != nil && isTransportName(stringValue(envelope["name"])) {
+	if envelope == nil {
+		return nil, fmt.Errorf("%w: transport code is not a JSON object", ErrInvalidToolEnvelope)
+	}
+	if isTransportName(stringValue(envelope["name"])) {
 		nested := parseArguments(envelope["arguments"])
 		if nested == nil {
-			return nil
+			return nil, fmt.Errorf("%w: nested transport arguments are not a JSON object", ErrInvalidToolEnvelope)
 		}
 		envelope = decodeTransportCode(nested["code"])
+		if envelope == nil {
+			return nil, fmt.Errorf("%w: nested transport code is not a JSON object", ErrInvalidToolEnvelope)
+		}
 	}
-	if envelope != nil && isTransportName(stringValue(envelope["name"])) {
-		return nil
+	if isTransportName(stringValue(envelope["name"])) {
+		return nil, fmt.Errorf("%w: transport envelope is nested more than once", ErrInvalidToolEnvelope)
 	}
-	return envelope
+	return envelope, nil
 }
 
 // schemaMatches 轻量 JSON-Schema 校验（type/required/properties/items/enum）。
@@ -887,32 +973,18 @@ func schemaMatches(value, schema any) bool {
 	return true
 }
 
-// extractClientToolCall 在 response.output 里找唯一的 run_officejs 调用并
-// 翻译成客户端工具调用形态。对齐参考实现的 extract_client_tool_call：
-// output 中必须恰好一个 transport 调用；envelope 解出的名字必须在 catalog 里；
-// function 工具的 arguments 须过 schema 校验。命中即把原生 item 记入 State。
-func extractClientToolCall(response map[string]any, source map[string]any, st *State) map[string]any {
-	output, _ := response["output"].([]any)
-	var native map[string]any
-	count := 0
-	for _, value := range output {
-		m, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t := stringValue(m["type"]); t == "function_call" || t == "custom_tool_call" {
-			if isTransportName(stringValue(m["name"])) {
-				native = m
-				count++
-			}
-		}
-	}
-	if native == nil || count != 1 {
-		return nil
-	}
-	_, byName := clientToolSpecs(source)
+type convertedToolCall struct {
+	native      map[string]any
+	call        map[string]any
+	outputIndex int
+}
+
+func convertNativeToolCall(native map[string]any, byName map[string]toolSpec) (map[string]any, error) {
 	allowedName := stringValue(native["name"])
-	inner := extractEnvelope(native)
+	inner, err := extractEnvelope(native)
+	if err != nil {
+		return nil, err
+	}
 	if inner != nil {
 		if n := stringValue(inner["tool"]); n != "" {
 			allowedName = n
@@ -921,11 +993,11 @@ func extractClientToolCall(response map[string]any, source map[string]any, st *S
 		}
 	}
 	if allowedName == "" || isTransportName(allowedName) {
-		return nil
+		return nil, fmt.Errorf("%w: transport envelope does not name a client tool", ErrInvalidToolEnvelope)
 	}
 	spec, ok := byName[allowedName]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("%w: transport requested unavailable client tool %q", ErrInvalidToolEnvelope, allowedName)
 	}
 	callID := stringValue(native["call_id"])
 	if callID == "" {
@@ -948,40 +1020,65 @@ func extractClientToolCall(response map[string]any, source map[string]any, st *S
 		} else {
 			inp = native["input"]
 		}
-		inpStr, isStr := inp.(string)
-		if !isStr {
-			if inp == nil {
-				return nil
-			}
-			inpStr = string(dumps(inp))
+		if inp == nil {
+			return nil, fmt.Errorf("%w: transport call for client tool %q has no input", ErrInvalidToolEnvelope, allowedName)
+		}
+		if inpStr, ok := inp.(string); ok {
+			result["input"] = inpStr
+		} else {
+			result["input"] = string(dumps(inp))
 		}
 		result["type"] = "custom_tool_call"
-		result["input"] = inpStr
+		return result, nil
+	}
+
+	var arguments any
+	if inner != nil {
+		arguments = inner["args"]
+		if arguments == nil {
+			arguments = inner["arguments"]
+		}
 	} else {
-		var arguments any
-		if inner != nil {
-			arguments = inner["args"]
-			if arguments == nil {
-				arguments = inner["arguments"]
-			}
-		} else {
-			arguments = native["arguments"]
-		}
-		parsed := parseArguments(arguments)
-		if parsed == nil {
-			return nil
-		}
-		if params := firstMap(spec.Spec, "parameters", "inputSchema", "input_schema"); params != nil {
-			if !schemaMatches(parsed, params) {
-				return nil
-			}
-		}
-		result["arguments"] = string(dumps(parsed))
+		arguments = native["arguments"]
 	}
-	if st != nil {
-		st.StoreNativeCall(callID, native)
+	parsed := parseArguments(arguments)
+	if parsed == nil {
+		return nil, fmt.Errorf("%w: arguments for client tool %q are not a JSON object", ErrInvalidToolEnvelope, allowedName)
 	}
-	return result
+	if params := firstMap(spec.Spec, "parameters", "inputSchema", "input_schema"); params != nil && !schemaMatches(parsed, params) {
+		return nil, fmt.Errorf("%w: arguments for client tool %q do not match its schema", ErrInvalidToolEnvelope, allowedName)
+	}
+	result["arguments"] = string(dumps(parsed))
+	return result, nil
+}
+
+func extractClientToolCalls(response map[string]any, source map[string]any) ([]convertedToolCall, error) {
+	output, _ := response["output"].([]any)
+	var natives []convertedToolCall
+	for index, value := range output {
+		m, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t := stringValue(m["type"]); (t != "function_call" && t != "custom_tool_call") || !isTransportName(stringValue(m["name"])) {
+			continue
+		}
+		natives = append(natives, convertedToolCall{native: m, outputIndex: index})
+	}
+	if len(natives) == 0 {
+		return nil, nil
+	}
+	_, byName := clientToolSpecs(source)
+	for index := range natives {
+		call, err := convertNativeToolCall(natives[index].native, byName)
+		if err != nil {
+			return nil, err
+		}
+		natives[index].call = call
+	}
+	// Store only after every call in the response has validated and the
+	// transformed response has been serialized successfully.
+	return natives, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1000,29 +1097,34 @@ func TransformResponseBody(raw []byte, source map[string]any, st *State) ([]byte
 	if err := json.Unmarshal(raw, &response); err != nil || response == nil {
 		return nil, nil, false, fmt.Errorf("upstream response is not a JSON object")
 	}
-	call := extractClientToolCall(response, source, st)
-	if call == nil {
+	calls, err := extractClientToolCalls(response, source)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if len(calls) == 0 {
 		return raw, response, false, nil
 	}
 	output, _ := response["output"].([]any)
-	replaced := make([]any, 0, len(output)+1)
-	done := false
-	for _, value := range output {
-		if m, ok := value.(map[string]any); ok && !done && stringValue(m["call_id"]) == call["call_id"] {
+	replaced := make([]any, 0, len(output))
+	byIndex := make(map[int]map[string]any, len(calls))
+	for _, converted := range calls {
+		byIndex[converted.outputIndex] = converted.call
+	}
+	for index, value := range output {
+		if call, ok := byIndex[index]; ok {
 			replaced = append(replaced, call)
-			done = true
 			continue
 		}
 		replaced = append(replaced, value)
-	}
-	if !done {
-		replaced = append([]any{call}, replaced...)
 	}
 	response["output"] = replaced
 	response["status"] = "completed"
 	out, err := json.Marshal(response)
 	if err != nil {
 		return nil, nil, false, err
+	}
+	for _, converted := range calls {
+		st.StoreNativeCall(stringValue(converted.call["call_id"]), converted.native)
 	}
 	return out, response, true, nil
 }

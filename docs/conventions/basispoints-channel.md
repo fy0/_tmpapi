@@ -61,9 +61,11 @@
 
 - 上游恒 SSE（整流读完，不做 token 转发）。`response.completed` 优先；内嵌
   `status=="completed"` 次之；`response.failed`/`error` → StreamFailure。
-- output 里必须**恰好一个** transport 调用才回译；envelope 剥至多一层；
-  name 必须在 catalog；function arguments 过 JSON-Schema 轻校验，失败即弃
-  （不向下游放坏调用）。命中后原生 item 以 call_id 记入 State 供下轮回放。
+- output 中的 transport 调用按原顺序全部回译（支持同一响应中的并行调用）；每个
+  envelope 至多剥一层，name 必须在 catalog；function arguments 须过 JSON-Schema
+  轻校验。任何一个封装无法完整解析时，整批返回 `invalid_tool_envelope`，不向下游
+  放坏调用，也不写入部分 State 缓存。命中后原生 item 以 call_id 记入 State 供下轮
+  回放。
 - 流式下游：先提交 200+SSE 头+注释心跳（复用 `startOpenAISSEKeepalive`，
   心跳字节不计入"已写语义响应"判定）；提交后的一切失败降级为
   `response.failed` 事件+[DONE]，不再走 JSON 错误/failover。

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -301,6 +303,54 @@ func TestForward_BasisPoints_InputTooLarge(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, s.rec.Code)
 	require.Contains(t, s.rec.Body.String(), "input_too_large")
 	require.Nil(t, s.upstream.lastReq, "oversized input must be rejected locally without hitting upstream")
+}
+
+func TestForward_BasisPoints_InvalidToolEnvelope(t *testing.T) {
+	tool := map[string]any{"type": "function", "name": "bash", "parameters": map[string]any{
+		"type": "object", "required": []any{"command"},
+		"properties": map[string]any{"command": map[string]any{"type": "string"}},
+	}}
+	code := `{"name":"bash","arguments":{"command":"echo "hello""}}`
+	arguments, err := json.Marshal(map[string]any{"code": code})
+	require.NoError(t, err)
+	call := map[string]any{"type": "function_call", "id": "fc_bad", "call_id": "call_bad", "name": "run_officejs", "arguments": string(arguments)}
+	upstreamBody, err := json.Marshal(map[string]any{
+		"id": "resp_bad", "model": "gpt-6-astra", "status": "completed", "output": []any{call},
+	})
+	require.NoError(t, err)
+
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bad upstream stream=%v", streaming), func(t *testing.T) {
+			s := newBasisPointsSetup(t, nil)
+			s.upstream.resp = bpsUpstreamSSEResponse(string(upstreamBody))
+			body, err := json.Marshal(map[string]any{"model": "gpt-6-astra", "stream": streaming, "input": "hi", "tools": []any{tool}})
+			require.NoError(t, err)
+			_, err = s.svc.Forward(context.Background(), s.c, s.account, body)
+			require.Error(t, err)
+			require.Equal(t, http.StatusBadGateway, s.rec.Code)
+			require.True(t, IsResponseCommitted(s.c))
+			require.Equal(t, "invalid_tool_envelope", gjson.Get(s.rec.Body.String(), "error.code").String())
+			require.NotContains(t, s.rec.Body.String(), `"name":"run_officejs"`)
+		})
+	}
+
+	t.Run("bad history", func(t *testing.T) {
+		s := newBasisPointsSetup(t, nil)
+		body, err := json.Marshal(map[string]any{
+			"model": "gpt-6-astra", "stream": false, "tools": []any{tool},
+			"input": []any{map[string]any{
+				"type": "function_call", "name": "bash", "call_id": "history_bad",
+				"arguments": `{"command":"echo "hello""}`,
+			}},
+		})
+		require.NoError(t, err)
+		_, err = s.svc.Forward(context.Background(), s.c, s.account, body)
+		require.Error(t, err)
+		require.Equal(t, http.StatusBadRequest, s.rec.Code)
+		require.True(t, IsResponseCommitted(s.c))
+		require.Equal(t, "invalid_tool_envelope", gjson.Get(s.rec.Body.String(), "error.code").String())
+		require.Nil(t, s.upstream.lastReq, "bad input must be rejected before contacting upstream")
+	})
 }
 
 // TestForward_BasisPoints_DisabledKeepsCodex verifies the flag gate: without
