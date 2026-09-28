@@ -65,7 +65,11 @@ func (st *State) NativeCall(callID string) map[string]any {
 	if st.native == nil {
 		return nil
 	}
-	return cloneMap(st.native[callID])
+	item, exists := st.native[callID]
+	if !exists {
+		return nil
+	}
+	return cloneMap(item)
 }
 
 // CachedAttachment returns the openai_file_id previously uploaded for a sha256
