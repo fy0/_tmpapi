@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -289,6 +290,14 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 
 	upstreamBody, err := basispoints.PrepareResponsesBody(source, cfg, st)
 	if err != nil {
+		if errors.Is(err, basispoints.ErrInvalidToolEnvelope) {
+			message := sanitizeUpstreamErrorMessage(err.Error())
+			body := map[string]any{"error": map[string]any{
+				"type": "invalid_tool_envelope", "code": "invalid_tool_envelope", "message": message,
+			}}
+			MarkResponseCommitted(c)
+			c.JSON(http.StatusBadRequest, body)
+		}
 		return nil, fmt.Errorf("prepare basispoints request body: %w", err)
 	}
 	// 实际上送的 model 以翻译结果为准（客户端 model 剥 -excel 后透传，
@@ -534,6 +543,18 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 	upstreamResponseModel := strings.TrimSpace(gjson.GetBytes(mustMarshalBasisPoints(responseObj), "model").String())
 	transformed, responseMap, _, err := basispoints.TransformResponseBody(mustMarshalBasisPoints(responseObj), source, st)
 	if err != nil {
+		if errors.Is(err, basispoints.ErrInvalidToolEnvelope) {
+			message := sanitizeUpstreamErrorMessage(err.Error())
+			if streamCommitted {
+				writeBasisPointsStreamFailure(c, upstreamModel, "invalid_tool_envelope", message)
+				return nil, fmt.Errorf("basispoints response tool envelope: %w", err)
+			}
+			MarkResponseCommitted(c)
+			c.JSON(http.StatusBadGateway, map[string]any{"error": map[string]any{
+				"type": "invalid_tool_envelope", "code": "invalid_tool_envelope", "message": message,
+			}})
+			return nil, fmt.Errorf("basispoints response tool envelope: %w", err)
+		}
 		return nil, err
 	}
 	// 回写客户端请求的模型名：上游恒报 upstream_model，客户端只认自己的 alias。
