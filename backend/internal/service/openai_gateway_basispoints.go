@@ -441,7 +441,13 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 		retry++
 		delay := openAIBasisPoints429RetryDelay
 		if resetAt := parseRetryAfterResetTime(upstream.header, time.Now()); resetAt != nil {
-			delay = min(max(time.Until(*resetAt), 0), openAIBasisPoints429RetryDelayMax)
+			delay = time.Until(*resetAt)
+			if delay < 0 {
+				delay = 0
+			}
+			if delay > openAIBasisPoints429RetryDelayMax {
+				delay = openAIBasisPoints429RetryDelayMax
+			}
 		}
 		slog.Info("basispoints_429_retry", "account_id", account.ID, "attempt", retry, "delay_ms", delay.Milliseconds())
 		if clientDone == nil {
