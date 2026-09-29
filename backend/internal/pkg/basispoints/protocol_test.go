@@ -141,3 +141,92 @@ func TestTransformResponseBodyWithoutToolCallPassesThrough(t *testing.T) {
 		t.Fatalf("plain response changed: converted=%v err=%v", converted, err)
 	}
 }
+
+// TestTransformResponseBodyCustomToolRetypesItemID：上游 run_officejs 是
+// function_call（fc_ id），翻回客户端 custom_tool_call 时 id 必须重冠成
+// ctc_——客户端原样回放 id，上游按类型校验前缀，fc_ 会 400 "Expected an ID
+// that begins with 'ctc'"。
+func TestTransformResponseBodyCustomToolRetypesItemID(t *testing.T) {
+	st := NewState()
+	source := map[string]any{"tools": []any{
+		map[string]any{"type": "custom", "name": "apply_patch",
+			"format": map[string]any{"type": "grammar"}},
+	}}
+	suffix := "0123456789abcdef0123456789abcdef0123456789abcdef"
+	call := map[string]any{
+		"type": "function_call", "id": "fc_" + suffix,
+		"call_id": "call_1", "name": "run_officejs",
+		"arguments": string(dumps(map[string]any{
+			"code": `{"name":"apply_patch","input":"*** Begin Patch\n*** End Patch"}`,
+		})),
+	}
+	response := map[string]any{"status": "completed", "output": []any{call}}
+	out, _, converted, err := TransformResponseBody(dumps(response), source, st)
+	if err != nil || !converted {
+		t.Fatalf("custom call not converted: converted=%v err=%v", converted, err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatal(err)
+	}
+	item := result["output"].([]any)[0].(map[string]any)
+	if item["type"] != "custom_tool_call" {
+		t.Fatalf("expected custom_tool_call, got %v", item["type"])
+	}
+	if id := stringValue(item["id"]); id != "ctc_"+suffix {
+		t.Fatalf("fc_ id must be retyped to ctc_ preserving suffix, got %q", id)
+	}
+	if stringValue(item["call_id"]) != "call_1" {
+		t.Fatalf("call_id changed: %v", item["call_id"])
+	}
+}
+
+// TestPrepareResponsesBodyRetypesPoisonedCallIDs：存量会话里已被污染的
+// custom_tool_call（fc_ id，名字不在本次 catalog、State 未命中）透传前按
+// 类型重冠，不再把坏前缀发给上游；function_call 上的 ctc_ id 镜像修复；
+// output item 的非 fc 前缀 id（ctco_）剥除，fc 前缀保留。
+func TestPrepareResponsesBodyRetypesPoisonedCallIDs(t *testing.T) {
+	source := transportTestSource()
+	source["input"] = []any{
+		map[string]any{
+			"type": "custom_tool_call", "id": "fc_poisoned", "call_id": "call_gone",
+			"name": "undeclared_tool", "input": "raw",
+		},
+		map[string]any{
+			"type": "function_call", "id": "ctc_swapped", "call_id": "call_gone2",
+			"name": "undeclared_fn", "arguments": "{}",
+		},
+		map[string]any{
+			"type": "custom_tool_call_output", "id": "ctco_bad", "call_id": "call_out",
+			"output": "done",
+		},
+		map[string]any{
+			"type": "function_call_output", "id": "fco_ok", "call_id": "call_out2",
+			"output": "done",
+		},
+	}
+	body, err := PrepareResponsesBody(source, DefaultConfig(), NewState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := body["input"].([]any)
+	ctc := items[len(items)-4].(map[string]any)
+	fc := items[len(items)-3].(map[string]any)
+	ctco := items[len(items)-2].(map[string]any)
+	fco := items[len(items)-1].(map[string]any)
+	if got := stringValue(ctc["id"]); got != "ctc_poisoned" {
+		t.Fatalf("poisoned custom_tool_call id not healed: %q", got)
+	}
+	if stringValue(ctc["type"]) != "custom_tool_call" {
+		t.Fatalf("type changed: %v", ctc["type"])
+	}
+	if got := stringValue(fc["id"]); got != "fc_swapped" {
+		t.Fatalf("swapped function_call id not healed: %q", got)
+	}
+	if _, exists := ctco["id"]; exists {
+		t.Fatalf("non-fc output id must be stripped: %v", ctco["id"])
+	}
+	if got := stringValue(fco["id"]); got != "fco_ok" {
+		t.Fatalf("fc-prefixed output id must be kept: %q", got)
+	}
+}

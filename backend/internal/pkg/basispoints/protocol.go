@@ -295,6 +295,40 @@ func functionItemID(callID string) string {
 	return "fc_" + callID
 }
 
+// toolCallItemIDPrefixes 是上游按 item type 校验 id 前缀的已知集合。
+// Responses 上游对回放 item 的 id 有类型约束：function_call 必须 fc_、
+// custom_tool_call 必须 ctc_、tool_search_call 必须 tsc_，否则 400
+// "Invalid 'input[N].id' ... Expected an ID that begins with 'ctc'"。
+var toolCallItemIDPrefixes = []string{"fc_", "ctc_", "tsc_"}
+
+func toolCallItemIDPrefix(itemType string) string {
+	switch itemType {
+	case "function_call":
+		return "fc_"
+	case "custom_tool_call":
+		return "ctc_"
+	case "tool_search_call":
+		return "tsc_"
+	}
+	return ""
+}
+
+// retypeToolCallItemID 把已知前缀的 item id 重冠为目标类型前缀，保留 suffix
+// 维持稳定与唯一；未知形态原样返回。用于 type 翻转（run_officejs→custom
+// tool）与已污染客户端历史的自愈——历史里的 fc_ id 由客户端原样回放。
+func retypeToolCallItemID(id, itemType string) string {
+	want := toolCallItemIDPrefix(itemType)
+	if want == "" || id == "" || strings.HasPrefix(id, want) {
+		return id
+	}
+	for _, known := range toolCallItemIDPrefixes {
+		if known != want && strings.HasPrefix(id, known) {
+			return want + strings.TrimPrefix(id, known)
+		}
+	}
+	return id
+}
+
 // transportEnvelopeCall 把客户端 function_call/custom_tool_call 历史项包装成
 // run_officejs 调用——catalog 消息教模型以 envelope 形态回放历史调用，
 // 保持一致性（对齐参考实现的 transport_envelope_call）。
@@ -545,6 +579,13 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) ([
 		item = cloneMap(item)
 		delete(item, "internal_chat_message_metadata_passthrough")
 		itype := strings.ToLower(stringValue(item["type"]))
+		if itype == "function_call" || itype == "custom_tool_call" {
+			// 存量污染自愈：回放 item 的 id 前缀与类型不符（fc_↔ctc_）时
+			// 按类型重冠；State 回放/envelope 路径不读 item 的 id，无影响。
+			if retyped := retypeToolCallItemID(stringValue(item["id"]), itype); retyped != stringValue(item["id"]) {
+				item["id"] = retyped
+			}
+		}
 		switch {
 		case itype == "function_call" || itype == "custom_tool_call":
 			callID := stringValue(item["call_id"])
@@ -588,6 +629,12 @@ func translateInputItems(rawInput any, byName map[string]toolSpec, st *State) ([
 				}
 			} else {
 				out = item
+				// 上游对回放 output item 的 id 按通用 fc 命名空间校验——
+				// 客户端铸的 ctco_ 等非 fc 前缀同样会被拒；剥掉即可，
+				// 配对靠 call_id 不依赖 id。
+				if id := stringValue(out["id"]); id != "" && !strings.HasPrefix(id, "fc") {
+					delete(out, "id")
+				}
 			}
 			out["output"] = normalizeToolOutput(out["type"] == "custom_tool_call_output", item["output"])
 			result = append(result, out)
@@ -1029,6 +1076,9 @@ func convertNativeToolCall(native map[string]any, byName map[string]toolSpec) (m
 			result["input"] = string(dumps(inp))
 		}
 		result["type"] = "custom_tool_call"
+		// 类型翻转后 id 前缀必须跟着换：native run_officejs 的 fc_ id 留在
+		// custom_tool_call 上会污染客户端历史，回放即被上游校验拒绝。
+		result["id"] = retypeToolCallItemID(stringValue(result["id"]), "custom_tool_call")
 		return result, nil
 	}
 

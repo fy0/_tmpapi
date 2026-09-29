@@ -353,6 +353,25 @@ func TestForward_BasisPoints_InvalidToolEnvelope(t *testing.T) {
 	})
 }
 
+// TestForward_BasisPoints_CompactionTriggerBypassesBPS：remote compaction v2
+// （裸 /responses + input 末尾 compaction_trigger）不能走 BPS——BPS 端点不会
+// 产出 compaction output item，触发回合必须回 Codex 通道。
+func TestForward_BasisPoints_CompactionTriggerBypassesBPS(t *testing.T) {
+	s := newBasisPointsSetup(t, nil)
+	inner := `{"id":"resp_cmp","model":"gpt-6-astra","status":"completed","output":[{"type":"compaction","id":"cmp_1","encrypted_content":"abc"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	s.upstream.resp = bpsUpstreamSSEResponse(inner)
+	body := []byte(`{"model":"gpt-6-astra","stream":true,"input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},` +
+		`{"type":"compaction_trigger"}` +
+		`]}`)
+
+	_, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+	require.NoError(t, err)
+	require.NotNil(t, s.upstream.lastReq)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/responses", s.upstream.lastReq.URL.String(),
+		"compaction trigger requests must stay on the Codex channel")
+}
+
 // TestForward_BasisPoints_DisabledKeepsCodex verifies the flag gate: without
 // extra.openai_basispoints the same account forwards to chatgpt.com.
 func TestForward_BasisPoints_DisabledKeepsCodex(t *testing.T) {

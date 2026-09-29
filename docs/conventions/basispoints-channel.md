@@ -17,12 +17,15 @@
   **不走 BPS**：上游无服务端压缩实现、永不产出 `compaction` output item，
   触发回合经它注定失败。网关按 `HasCompactionTriggerInInput` 在路由层排除，
   回 Codex 通道（真上游支持 v2；该通道 sanitize 顺带剥除带病 item id）。
+<<<<<<< HEAD
 - 上游 429 **不触发账号冻结/failover**：插件端点限流是会话内配额（几十秒
   自愈），与账号级配额无关。`forwardOpenAIBasisPoints` 按 Retry-After
   （缺省 30s、单次上限 90s）原地重发最多 2 次；耗尽仍 429 则透传上游错误
   体给客户端退避。`handle429`/`markOpenAIOAuth429RateLimited` 对
   `openai_basispoints` 账号一律早退，不写 `SetRateLimited`、不运行时熔断、
   不计入全局 429 storm。
+=======
+>>>>>>> 401cfa985 (fix(basispoints): route compaction_trigger off BPS, retype tool-call item ids)
 
 ## 请求白名单（上游严格校验，多一个字段即 422）
 

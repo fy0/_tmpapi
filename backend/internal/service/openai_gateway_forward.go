@@ -210,7 +210,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Basispoints（Excel 插件画像）通道：extra.openai_basispoints 命中的账号把
 	// 基础 /responses 请求改送 bps.openai.com，绕过 chatgpt.com 的降智调度。
 	// compact / input_tokens 等子路径无对应上游端点，仍走原 Codex 通道。
-	if account.IsOpenAIBasisPointsEnabled() && openAIResponsesRequestPathSuffix(c) == "" {
+	// 含 compaction_trigger 的裸 /responses 请求（remote compaction v2）同样
+	// 必须回 Codex 通道：BPS 端点没有该服务端实现，永远不会产出 compaction
+	// output item，触发回合走 BPS 注定失败。
+	if account.IsOpenAIBasisPointsEnabled() && openAIResponsesRequestPathSuffix(c) == "" &&
+		!HasCompactionTriggerInInput(body) {
 		SetActualOpenAIUpstreamEndpoint(c, openAIBasisPointsUpstreamEndpoint)
 		return s.forwardOpenAIBasisPoints(ctx, c, account, body, startTime)
 	}
