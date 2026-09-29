@@ -1164,6 +1164,12 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 // handle429 处理429限流错误
 // 解析响应头获取重置时间，标记账号为限流状态
 func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
+	// Basispoints 通道的 429 由 forwardOpenAIBasisPoints 原地等待重发消化：
+	// 那是 Excel 插件端点的会话内限流（几十秒自愈），不是账号配额耗尽，
+	// 持久化冻结只会把账号无谓摘除到 resetAt。
+	if account != nil && account.IsOpenAIBasisPointsEnabled() {
+		return
+	}
 	// OpenAI OAuth stays on the same account for the gateway's bounded retry
 	// window. Persisting a rate-limit reset on the first 429 would make the next
 	// retry ineligible and silently turn same-account recovery into a switch.

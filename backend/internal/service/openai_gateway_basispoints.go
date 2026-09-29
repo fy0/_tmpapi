@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -44,6 +45,13 @@ const (
 	openAIBasisPointsKeepaliveInterval    = 20 * time.Second
 	openAIBasisPointsUploadTimeout        = 120 * time.Second
 	openAIBasisPointsUploadMaxResp        = 1 << 20
+	// BPS 的 429 是插件端点的会话内限流，通常几十秒内自愈——走账号冻结/
+	// failover 的代价比原地等待大得多（冻结会把整账号摘除到 resetAt）。
+	// 命中时按 Retry-After（缺省 30s、单次上限 90s）原地卡住重发；预算耗尽
+	// 仍 429 则把错误透传给客户端退避，全程不写账号限流状态。
+	openAIBasisPoints429RetryDelay    = 30 * time.Second
+	openAIBasisPoints429RetryDelayMax = 90 * time.Second
+	openAIBasisPoints429MaxRetries    = 2
 )
 
 // IsOpenAIBasisPointsEnabled 报告 OpenAI OAuth/SetupToken 账号是否启用
@@ -350,16 +358,6 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 		defer timeoutCancel()
 	}
 	defer cancelUpstream()
-	upstreamReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.ResponsesURL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
-	for key, values := range basispoints.AuthHeaders(token, accountID, reqStream, cfg) {
-		for _, value := range values {
-			upstreamReq.Header.Add(key, value)
-		}
-	}
 
 	// 流式客户端启用 SSE 注释心跳（复用 compact keepalive 设施）：上游生成动辄
 	// 数分钟且期间零字节，经反向代理时下游空闲会触发读超时、客户端重试复制上游
@@ -379,25 +377,41 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 		return committed
 	}
 
-	resultCh := make(chan *basisPointsUpstreamResult, 1)
-	go func() {
-		resp, doErr := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
-		if doErr != nil {
-			resultCh <- &basisPointsUpstreamResult{err: doErr}
-			return
+	// 429 原地重试：每次尝试都要新 request（Body reader 已消费）。超时预算
+	// reqCtx 覆盖所有尝试。
+	sendUpstream := func() <-chan *basisPointsUpstreamResult {
+		resultCh := make(chan *basisPointsUpstreamResult, 1)
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.ResponsesURL, bytes.NewReader(payload))
+		if reqErr != nil {
+			resultCh <- &basisPointsUpstreamResult{err: reqErr}
+			return resultCh
 		}
-		defer func() { _ = resp.Body.Close() }()
-		result := &basisPointsUpstreamResult{status: resp.StatusCode, header: resp.Header.Clone()}
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, cfg.MaxResponseBytes+openAIBasisPointsResponseReadLimitPad))
-		if readErr != nil {
-			result.err = readErr
-		} else if int64(len(raw)) > cfg.MaxResponseBytes {
-			result.err = fmt.Errorf("basispoints upstream response exceeds %d bytes", cfg.MaxResponseBytes)
-		} else {
-			result.raw = raw
+		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+		for key, values := range basispoints.AuthHeaders(token, accountID, reqStream, cfg) {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
 		}
-		resultCh <- result
-	}()
+		go func() {
+			resp, doErr := s.doOpenAIUpstream(req, proxyURL, account)
+			if doErr != nil {
+				resultCh <- &basisPointsUpstreamResult{err: doErr}
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			result := &basisPointsUpstreamResult{status: resp.StatusCode, header: resp.Header.Clone()}
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, cfg.MaxResponseBytes+openAIBasisPointsResponseReadLimitPad))
+			if readErr != nil {
+				result.err = readErr
+			} else if int64(len(raw)) > cfg.MaxResponseBytes {
+				result.err = fmt.Errorf("basispoints upstream response exceeds %d bytes", cfg.MaxResponseBytes)
+			} else {
+				result.raw = raw
+			}
+			resultCh <- result
+		}()
+		return resultCh
+	}
 
 	// 等待上游期间客户端断开则取消上游请求，不再白烧上游额度（对齐参考实现的
 	// poll+beat 断线检测；这里直接由 request ctx 驱动，比 5s 轮询更快）。
@@ -405,14 +419,43 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 	if ctx != nil {
 		clientDone = ctx.Done()
 	}
-	var upstream *basisPointsUpstreamResult
-	select {
-	case upstream = <-resultCh:
-	case <-clientDone:
+	clientGone := func() (*OpenAIForwardResult, error) {
 		cancelUpstream()
-		<-resultCh
 		stopStreamKeepalive()
 		return nil, fmt.Errorf("basispoints: client disconnected: %w", ctx.Err())
+	}
+	var upstream *basisPointsUpstreamResult
+	retry := 0
+	for {
+		resultCh := sendUpstream()
+		select {
+		case upstream = <-resultCh:
+		case <-clientDone:
+			<-resultCh
+			return clientGone()
+		}
+		if upstream == nil || upstream.err != nil || upstream.status != http.StatusTooManyRequests ||
+			retry >= openAIBasisPoints429MaxRetries {
+			break
+		}
+		retry++
+		delay := openAIBasisPoints429RetryDelay
+		if resetAt := parseRetryAfterResetTime(upstream.header, time.Now()); resetAt != nil {
+			delay = min(max(time.Until(*resetAt), 0), openAIBasisPoints429RetryDelayMax)
+		}
+		slog.Info("basispoints_429_retry", "account_id", account.ID, "attempt", retry, "delay_ms", delay.Milliseconds())
+		if clientDone == nil {
+			time.Sleep(delay)
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-clientDone:
+			timer.Stop()
+			return clientGone()
+		}
+		timer.Stop()
 	}
 	streamCommitted := stopStreamKeepalive()
 
@@ -458,6 +501,24 @@ func (s *OpenAIGatewayService) forwardOpenAIBasisPoints(
 				Message:            upstreamMsg,
 			})
 			writeBasisPointsStreamFailure(c, upstreamModel, fmt.Sprintf("upstream_http_%d", upstream.status), truncateString(string(upstream.raw), 500))
+			return nil, fmt.Errorf("basispoints upstream error: %d message=%s", upstream.status, upstreamMsg)
+		}
+		// 429 原地重试预算耗尽：透传上游错误体给客户端自行退避，不冻结账号、
+		// 不 failover——BPS 的插件限流通常几十秒自愈，冻结只会把账号无谓摘除。
+		if upstream.status == http.StatusTooManyRequests {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: upstream.status,
+				UpstreamRequestID:  respHeader.Get("x-request-id"),
+				Kind:               "http_error",
+				Message:            upstreamMsg,
+			})
+			MarkResponseCommitted(c)
+			writeOpenAIUpstreamClientError(c, upstream.status, upstream.raw, upstreamMsg)
 			return nil, fmt.Errorf("basispoints upstream error: %d message=%s", upstream.status, upstreamMsg)
 		}
 		if s.shouldFailoverOpenAIUpstreamResponse(account, upstream.status, upstreamMsg, upstream.raw) {

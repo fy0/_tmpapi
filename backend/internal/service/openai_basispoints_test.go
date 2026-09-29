@@ -372,6 +372,48 @@ func TestForward_BasisPoints_CompactionTriggerBypassesBPS(t *testing.T) {
 		"compaction trigger requests must stay on the Codex channel")
 }
 
+// TestForward_BasisPoints_429RetriesInPlace：BPS 上游 429 按 Retry-After 原地
+// 等待重发，不冻结账号、不 failover。Retry-After: 0 让测试不用真等 30s。
+func TestForward_BasisPoints_429RetriesInPlace(t *testing.T) {
+	s := newBasisPointsSetup(t, nil)
+	limited := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"0"}, "x-request-id": []string{"rid_429"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"slow down"}}`)),
+	}
+	inner := `{"id":"resp_ok","model":"gpt-6-astra","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	s.upstream.responses = []*http.Response{limited, bpsUpstreamSSEResponse(inner)}
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	_, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+	require.NoError(t, err)
+	require.Len(t, s.upstream.requests, 2, "429 must be retried in place on the same account")
+	require.Nil(t, s.account.RateLimitedAt, "bps 429 must not persist a rate-limit freeze")
+	require.False(t, s.svc.isOpenAIAccountRuntimeBlocked(s.account), "bps 429 must not runtime-block the account")
+}
+
+// TestForward_BasisPoints_429ExhaustedPassesThrough：重试预算耗尽仍 429 时把
+// 上游错误透传给客户端（不 failover、不冻结）。
+func TestForward_BasisPoints_429ExhaustedPassesThrough(t *testing.T) {
+	s := newBasisPointsSetup(t, nil)
+	limited := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": []string{"0"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"slow down"}}`)),
+		}
+	}
+	s.upstream.responses = []*http.Response{limited(), limited(), limited(), limited()}
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	_, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+	require.Error(t, err)
+	require.Equal(t, http.StatusTooManyRequests, s.rec.Code, "exhausted 429 must pass through to the client")
+	require.Len(t, s.upstream.requests, 1+openAIBasisPoints429MaxRetries)
+	require.Nil(t, s.account.RateLimitedAt)
+	require.False(t, s.svc.isOpenAIAccountRuntimeBlocked(s.account))
+}
+
 // TestForward_BasisPoints_DisabledKeepsCodex verifies the flag gate: without
 // extra.openai_basispoints the same account forwards to chatgpt.com.
 func TestForward_BasisPoints_DisabledKeepsCodex(t *testing.T) {

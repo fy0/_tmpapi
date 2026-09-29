@@ -225,6 +225,11 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 	if s == nil || !account.TargetsChatGPTCodexUpstream() {
 		return
 	}
+	// BPS 通道的 429 由请求内重试消化，不参与运行时熔断，也不计入全局
+	// 429 storm（插件端点限流与 chatgpt.com 账号配额是两件事）。
+	if account.IsOpenAIBasisPointsEnabled() {
+		return
+	}
 	// Spark 影子：不按 /responses 429 的 global x-codex-* 信号做内存运行时熔断(同 handle429,外审第8轮 P1)。
 	// 同时避免把 spark 的 429 计入全局 429 storm 计数(recordOpenAIOAuth429),否则会误伤母账号 failover 决策。
 	if account.IsShadow() {
