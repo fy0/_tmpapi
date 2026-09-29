@@ -28,6 +28,24 @@ func nativeTestCall(callID, code string) map[string]any {
 	}
 }
 
+func mustList(t *testing.T, v any) []any {
+	t.Helper()
+	list, ok := v.([]any)
+	if !ok {
+		t.Fatalf("expected []any, got %T", v)
+	}
+	return list
+}
+
+func mustMap(t *testing.T, v any) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", v)
+	}
+	return m
+}
+
 func TestTransformResponseBodyRepairsInvalidEscape(t *testing.T) {
 	// A model-generated code string can contain a single invalid JSON escape.
 	code := `{"name":"bash","arguments":{"command":"rg -g '!\.git/**'"}}`
@@ -44,7 +62,7 @@ func TestTransformResponseBodyRepairsInvalidEscape(t *testing.T) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatal(err)
 	}
-	call := result["output"].([]any)[0].(map[string]any)
+	call := mustMap(t, mustList(t, result["output"])[0])
 	if call["name"] != "bash" || st.NativeCall("call_1") == nil {
 		t.Fatalf("call was not converted and cached: %v", call)
 	}
@@ -89,8 +107,8 @@ func TestTransformResponseBodyMultipleCalls(t *testing.T) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatal(err)
 	}
-	items := result["output"].([]any)
-	if items[0].(map[string]any)["name"] != "bash" || items[2].(map[string]any)["name"] != "read" {
+	items := mustList(t, result["output"])
+	if mustMap(t, items[0])["name"] != "bash" || mustMap(t, items[2])["name"] != "read" {
 		t.Fatalf("calls changed order: %v", items)
 	}
 	if st.NativeCall("call_1") == nil || st.NativeCall("call_2") == nil {
@@ -118,8 +136,8 @@ func TestPrepareResponsesBodyRejectsInvalidHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := body["input"].([]any)
-	wrapped := items[len(items)-1].(map[string]any)
+	items := mustList(t, body["input"])
+	wrapped := mustMap(t, items[len(items)-1])
 	inner := parseArguments(parseArguments(wrapped["arguments"])["code"])
 	if got := parseArguments(inner["arguments"])["command"]; got != `rg -g '!\.git/**'` {
 		t.Fatalf("history command changed: %v", got)
@@ -169,7 +187,7 @@ func TestTransformResponseBodyCustomToolRetypesItemID(t *testing.T) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatal(err)
 	}
-	item := result["output"].([]any)[0].(map[string]any)
+	item := mustMap(t, mustList(t, result["output"])[0])
 	if item["type"] != "custom_tool_call" {
 		t.Fatalf("expected custom_tool_call, got %v", item["type"])
 	}
@@ -209,11 +227,11 @@ func TestPrepareResponsesBodyRetypesPoisonedCallIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := body["input"].([]any)
-	ctc := items[len(items)-4].(map[string]any)
-	fc := items[len(items)-3].(map[string]any)
-	ctco := items[len(items)-2].(map[string]any)
-	fco := items[len(items)-1].(map[string]any)
+	items := mustList(t, body["input"])
+	ctc := mustMap(t, items[len(items)-4])
+	fc := mustMap(t, items[len(items)-3])
+	ctco := mustMap(t, items[len(items)-2])
+	fco := mustMap(t, items[len(items)-1])
 	if got := stringValue(ctc["id"]); got != "ctc_poisoned" {
 		t.Fatalf("poisoned custom_tool_call id not healed: %q", got)
 	}

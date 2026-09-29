@@ -388,7 +388,7 @@ func repairInvalidJSONEscapes(raw string) (string, bool) {
 	for i := 0; i < len(raw); i++ {
 		char := raw[i]
 		if !inString {
-			out.WriteByte(char)
+			_ = out.WriteByte(char)
 			if char == '"' {
 				inString = true
 			}
@@ -396,11 +396,11 @@ func repairInvalidJSONEscapes(raw string) (string, bool) {
 		}
 		if char == '"' {
 			inString = false
-			out.WriteByte(char)
+			_ = out.WriteByte(char)
 			continue
 		}
 		if char != '\\' {
-			out.WriteByte(char)
+			_ = out.WriteByte(char)
 			continue
 		}
 		if i+1 >= len(raw) {
@@ -408,8 +408,8 @@ func repairInvalidJSONEscapes(raw string) (string, bool) {
 		}
 		escaped := raw[i+1]
 		if strings.IndexByte(`"\/bfnrt`, escaped) >= 0 {
-			out.WriteByte(char)
-			out.WriteByte(escaped)
+			_ = out.WriteByte(char)
+			_ = out.WriteByte(escaped)
 			i++
 			continue
 		}
@@ -422,12 +422,12 @@ func repairInvalidJSONEscapes(raw string) (string, bool) {
 				}
 			}
 			if validHex {
-				out.WriteString(raw[i : i+6])
+				_, _ = out.WriteString(raw[i : i+6])
 				i += 5
 				continue
 			}
 		}
-		out.WriteString(`\\`)
+		_, _ = out.WriteString(`\\`)
 		changed = true
 	}
 	return out.String(), changed
