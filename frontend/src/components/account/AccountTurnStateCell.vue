@@ -206,43 +206,6 @@ interface PoolTicket {
   reminted: number
 }
 
-/**
- * openai_turn_state_observed：账号最近一次**自然铸造**（本次没注入）的形态。
- * 后端只存形态，没有 blob，而且一个账号只存一条 —— 铸什么由账号当时的权重决定，
- * 与模型无关，按模型建表既会丢失更新又会无界增长。model 只说明这个读数是哪个模型的
- * 请求带回来的。
- *
- * 后端也下发算好的 healthy，这里刻意不读它：另外两个源（候选池 / 手填）只有 blob，
- * 健康与否必须前端自己判，读了后端的就等于同一列用两套判据。前后端的形态表是两份手抄
- * （TURN_STATE_SHAPES / openAITurnStateShapes），哪天漂移了，同一个形态会在同一个格子里
- * 一行紫一行琥珀，而页面上没有任何东西提示这是判据分歧。统一由前端这张表说了算。
- */
-interface ShapeObservation {
-  model?: string
-  blocks?: number
-  chars?: number
-  healthy?: boolean
-  minted_at?: string
-  observed_at?: string
-}
-
-/**
- * 三个源归一后的一行。带 blob 的两个源（候选池 / 手填）在这里就折成 chars + verdict，
- * 与只有形态的观测源对齐——下游只用得着这两个值，留着 blob 只会让渲染路径多一条
- * 「这一行有没有 blob」的分支。
- *
- * active = 「这条票现在真的会被注入」，由本组件按后端的注入分支推出来，不是后端下发的
- * 字段。必填而不是可选：可选 + `!== false` 的默认方向是「没打标就当正在注入」，错在
- * 危险的那一侧——将来多一条供数路径忘了打标，一条只是观测到的记录就会被渲染成正在注入。
- */
-interface PoolTicket {
-  model: string
-  chars: number
-  verdict: TurnStateVerdict
-  mintedAt: Date
-  active: boolean
-}
-
 const extra = computed(
   () => (props.account.extra as Record<string, unknown> | undefined) ?? {}
 )
@@ -667,8 +630,6 @@ const hunterTitle = computed(() =>
 )
 
 /**
- * 已废弃（2026-09-23，判据是「连续 N 次 292」，已失效）：只保留展示，后续版本移除。
- *
  * 降智恢复探测（extra.openai_turn_state_recovery / _state）：走账号自己的出口、间隔随机，
  * 每次出一道糖果题，最近 window 次里答对 success 次判定恢复。判定后后端停止探测，
  * 所以这行改说「已恢复」而不是下次窗口。

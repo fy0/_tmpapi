@@ -567,19 +567,6 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(call *openAIQuotaCall) (map[
 			headers["user-agent"] = resolveCodexOutboundIdentity(ua).userAgent
 		}
 	}
-	// 额度面与推理面自报同一个客户端。必须过 resolveCodexOutboundIdentity：推理面的 UA
-	// 版本段会被重建成生效版本，这里直接写账号原值的话，同一账号在 /responses 报生效版本、
-	// 在 /wham/usage 报管理员填的历史版本，两面反而对不上。
-	//
-	// 只认新键 extra.codex_user_agent，不认遗留的 credentials.user_agent：后者是改动前就
-	// 存在的字段，跟着它走会让一批没启用本功能的老账号在 /wham/usage 上换 UA——那是本轮
-	// 不该有的字节变化。关闭强制统一身份时也整体不接管：那条路径上推理面保留账号原值的
-	// 版本段，这里再去重建就是反方向的不一致。
-	if codexIdentityEnforcement.Load() {
-		if ua := forwardedRow.getCodexUserAgentOverride(); ua != "" {
-			headers["user-agent"] = resolveCodexOutboundIdentity(ua).userAgent
-		}
-	}
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil
 	}
