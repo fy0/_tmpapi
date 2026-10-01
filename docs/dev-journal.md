@@ -1,5 +1,27 @@
 # dev-journal
 
+## 2026-10-01 同步上游 v0.2.11-klno.2（含 gpt-6.1-sol）
+
+- 上游 KlN-4096/sub2api klno 推进到 v0.2.11-klno.2，已内置 gpt-6.1-sol
+  （DefaultModels、codexModelMap、专属 instructions codex_gpt61_sol.json、
+  effort 校验），且把旧补丁栈整体吸收为 squash 演进版（149 个新提交）。
+- 同步方式：本地 55 个提交分两段 rebase——旧栈段
+  `rebase -X ours --empty=drop --onto upstream-klno <mb> 3fd1b3de6`，git 自动
+  识别「patch contents already upstream」丢弃大半；BPS 尾段手动解冲突。
+- 坑：`-X ours` 的 add/add 冲突把 fork 自有的 `sync-upstream.yml`（我们对
+  KlN 的版本，上游那份是 KlN→Wei-Shaw 的）和 docs/ 独有文件换成了上游版/
+  丢掉，用单独的恢复提交拉回（`dae4ab26d`）；`docs/conventions/` 被上游
+  .gitignore 覆盖，`git add` 需 `-f`。
+- 另一坑：被部分吸收的提交仍把上游已有内容按旧上下文重复插入（
+  CreateCodexBackendReqClient 重定义、buildCodexQuotaHeaders 接管块重复、
+  TurnStateCell 接口重复声明、hunter 旧废弃注释、turnStateRecovery 旧
+  措辞），单独清理提交回退到上游版本（`28ba7e536`）。这类残留只能靠
+  `git diff upstream-klno HEAD` 审计抓出来。
+- 验证：`go build ./...` 全量通过；定向测试
+  CodexFingerprint*/CPR/BasisPoints 等 ok。
+- 剩余本地提交：BPS 系列 + fork CI（ghcr/sync-upstream）+ 恢复/清理提交；
+  待 push --force-with-lease。
+
 ## 2026-09-30 BPS 429 消化策略：原地等待重发，不冻结账号
 
 - 背景：BPS 上游 429 是 Excel 插件端点的会话内限流，通常几十秒自愈；但
